@@ -1,39 +1,42 @@
 import scipy.sparse as sp
 
-from .....electromagnetics.static.resistivity.simulation import BaseDCSimulation as Sim
-from .....utils import Zero, mkvc
-from .....data import Data
-from ....utils import compute_chunk_sizes
+from .....electromagnetics.static.resistivity.simulation_2d import BaseDCSimulation2D as Sim
+from .simulation import dask_getJtJdiag, dask_Jvec, dask_Jtvec
 import dask
 import dask.array as da
-from dask.distributed import Future
 import numpy as np
 import zarr
-import os
-import shutil
 import numcodecs
 
 numcodecs.blosc.use_threads = False
 
 Sim.sensitivity_path = './sensitivity/'
 
+Sim.getJtJdiag = dask_getJtJdiag
+Sim.Jvec = dask_Jvec
+Sim.Jtvec = dask_Jtvec
+
 
 def dask_fields(self, m=None, return_Ainv=False):
     if m is not None:
         self.model = m
 
+    kys = self._quad_points
+    f = self.fieldsPair(self)
+    f._quad_weights = self._quad_weights
 
-    A = self.getA()
-    Ainv = self.solver(A, **self.solver_opts)
-    RHS = self.getRHS()
+    Ainv_out = {}
+    for iky, ky in enumerate(kys):
+        A = self.getA(ky)
+        Ainv = self.solver(A, **self.solver_opts)
+        Ainv_out[iky] = self.solver(sp.csr_matrix(A.T), **self.solver_opts)
+        RHS = self.getRHS(ky)
+        f[:, self._solutionType, iky] = Ainv * RHS
 
-    f = self.fieldsPair(self, shape=RHS.shape)
-    f[:, self._solutionType] = Ainv * RHS
-
-    Ainv.clean()
+        Ainv.clean()
 
     if return_Ainv:
-        return f, self.solver(sp.csr_matrix(A.T), **self.solver_opts)
+        return f, Ainv_out
     else:
         return f, None
 
@@ -41,62 +44,16 @@ def dask_fields(self, m=None, return_Ainv=False):
 Sim.fields = dask_fields
 
 
-def dask_getJtJdiag(self, m, W=None):
-    """
-        Return the diagonal of JtJ
-    """
-    self.model = m
-    if self.gtgdiag is None:
-        if isinstance(self.Jmatrix, Future):
-            self.Jmatrix  # Wait to finish
-        # Need to check if multiplying weights makes sense
-        if W is None:
-            self.gtgdiag = da.sum(self.Jmatrix ** 2, axis=0).compute()
-        else:
-            w = da.from_array(W.diagonal(), chunks='auto')[:, None]
-            self.gtgdiag = da.sum((w * self.Jmatrix) ** 2, axis=0).compute()
-
-    return self.gtgdiag
-
-
-Sim.getJtJdiag = dask_getJtJdiag
-
-
-def dask_Jvec(self, m, v):
-    """
-        Compute sensitivity matrix (J) and vector (v) product.
-    """
-    self.model = m
-    if isinstance(self.Jmatrix, Future):
-        self.Jmatrix  # Wait to finish
-
-    return da.dot(self.Jmatrix, v).astype(np.float32)
-
-
-Sim.Jvec = dask_Jvec
-
-
-def dask_Jtvec(self, m, v):
-    """
-        Compute adjoint sensitivity matrix (J^T) and vector (v) product.
-    """
-    self.model = m
-    if isinstance(self.Jmatrix, Future):
-        self.Jmatrix  # Wait to finish
-
-    return da.dot(v, self.Jmatrix).astype(np.float32)
-
-Sim.Jtvec = dask_Jtvec
-
-
 def compute_J(self, f=None, Ainv=None):
+    kys = self._quad_points
+    weights = self._quad_weights
 
     if f is None:
         f, Ainv = self.fields(self.model, return_Ainv=True)
 
     m_size = self.model.size
     row_chunks = int(np.ceil(
-        float(self.survey.nD) / np.ceil(float(m_size) * self.survey.nD * 8. * 1e-6 / self.max_chunk_size)
+        float(self.survey.nD) / np.ceil(float(m_size) * self.survey.nD * len(kys) * 8. * 1e-6 / self.max_chunk_size)
     ))
     Jmatrix = zarr.open(
         self.sensitivity_path + f"J.zarr",
@@ -107,33 +64,27 @@ def compute_J(self, f=None, Ainv=None):
 
     blocks = []
     count = 0
-    for source in self.survey.source_list:
-        u_source = f[source, self._solutionType]
 
+    for i_src, source in enumerate(self.survey.source_list):
         for rx in source.receiver_list:
-
             PTv = rx.getP(self.mesh, rx.projGLoc(f)).toarray().T
 
             for dd in range(int(np.ceil(PTv.shape[1] / row_chunks))):
-                start, end = dd*row_chunks, np.min([(dd+1)*row_chunks, PTv.shape[1]])
-                df_duTFun = getattr(f, "_{0!s}Deriv".format(rx.projField), None)
-                df_duT, df_dmT = df_duTFun(source, None, PTv[:, start:end], adjoint=True)
-                ATinvdf_duT = Ainv * df_duT
-                dA_dmT = self.getADeriv(u_source, ATinvdf_duT, adjoint=True)
-                dRHS_dmT = self.getRHSDeriv(source, ATinvdf_duT, adjoint=True)
-                du_dmT = -dA_dmT
-                if not isinstance(dRHS_dmT, Zero):
-                    du_dmT += dRHS_dmT
-                if not isinstance(df_dmT, Zero):
-                    du_dmT += df_dmT
+                start, end = dd * row_chunks, np.min([(dd + 1) * row_chunks, PTv.shape[1]])
+                block = np.zeros((end-start, m_size))
+                for iky, ky in enumerate(kys):
 
-                #
-                du_dmT = du_dmT.T.reshape((-1, m_size))
+                    u_ky = f[:, self._solutionType, iky]
+                    u_source = u_ky[:, i_src]
+                    ATinvdf_duT = Ainv[iky] * PTv[:, start:end]
+                    dA_dmT = self.getADeriv(ky, u_source, ATinvdf_duT, adjoint=True)
+                    du_dmT = -weights[iky] * dA_dmT
+                    block += du_dmT.T.reshape((-1, m_size))
 
                 if len(blocks) == 0:
-                    blocks = du_dmT
+                    blocks = block
                 else:
-                    blocks = np.vstack([blocks, du_dmT])
+                    blocks = np.vstack([blocks, block])
 
                 while blocks.shape[0] >= row_chunks:
                     Jmatrix.set_orthogonal_selection(
@@ -144,7 +95,7 @@ def compute_J(self, f=None, Ainv=None):
                     blocks = blocks[row_chunks:, :].astype(np.float32)
                     count += row_chunks
 
-                del df_duT, ATinvdf_duT, dA_dmT, dRHS_dmT, du_dmT
+                del ATinvdf_duT, dA_dmT, block
 
     if len(blocks) != 0:
         Jmatrix.set_orthogonal_selection(
@@ -152,8 +103,10 @@ def compute_J(self, f=None, Ainv=None):
             blocks.astype(np.float32)
         )
 
-    del Jmatrix
-    Ainv.clean()
+    for iky, ky in enumerate(kys):
+        Ainv[iky].clean()
+
+    del Jmatrix, Ainv
 
     return da.from_zarr(self.sensitivity_path + f"J.zarr")
 
@@ -176,7 +129,13 @@ def dask_dpred(self, m=None, f=None, compute_J=False):
 
     Where P is a projection of the fields onto the data space.
     """
-    if self.survey is None:
+    weights = self._quad_weights
+    if self._mini_survey is not None:
+        survey = self._mini_survey
+    else:
+        survey = self.survey
+
+    if survey is None:
         raise AttributeError(
             "The survey has not yet been set and is required to compute "
             "data. Please set the survey for the simulation: "
@@ -188,22 +147,25 @@ def dask_dpred(self, m=None, f=None, compute_J=False):
             m = self.model
         f, Ainv = self.fields(m, return_Ainv=compute_J)
 
-    data = Data(self.survey)
-    for src in self.survey.source_list:
+    temp = np.empty(survey.nD)
+    count = 0
+    for src in survey.source_list:
         for rx in src.receiver_list:
-            data[src, rx] = rx.eval(src, self.mesh, f)
+            d = rx.eval(src, self.mesh, f).dot(weights)
+            temp[count: count + len(d)] = d
+            count += len(d)
 
     if compute_J:
         Jmatrix = self.compute_J(f=f, Ainv=Ainv)
-        return (mkvc(data), Jmatrix)
+        return self._mini_survey_data(temp), Jmatrix
 
-    return mkvc(data)
+    return self._mini_survey_data(temp)
 
 
 Sim.dpred = dask_dpred
 
 
-def dask_getSourceTerm(self):
+def dask_getSourceTerm(self, _):
     """
     Evaluates the sources, and puts them in matrix form
     :rtype: tuple
@@ -235,3 +197,5 @@ def dask_getSourceTerm(self):
 
 
 Sim.getSourceTerm = dask_getSourceTerm
+
+

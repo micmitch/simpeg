@@ -30,7 +30,7 @@ import tarfile
 
 from discretize import TreeMesh
 from discretize.utils import mkvc, refine_tree_xyz
-
+from SimPEG import dask
 from SimPEG.utils import surface2ind_topo, model_builder
 from SimPEG import (
     maps,
@@ -321,7 +321,7 @@ reg.norms = np.c_[p, qx, qz]
 
 # Define how the optimization problem is solved. Here we will use an inexact
 # Gauss-Newton approach.
-opt = optimization.InexactGaussNewton(maxIter=40)
+opt = optimization.ProjectedGNCG(maxIter=40)
 
 # Here we define the inverse problem that is to be solved
 inv_prob = inverse_problem.BaseInvProblem(dmis, reg, opt)

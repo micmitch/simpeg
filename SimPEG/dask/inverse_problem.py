@@ -114,7 +114,7 @@ def get_dpred(self, m, f=None, compute_J=False):
                 compute_sensitivities = compute_J and (objfct.simulation._Jmatrix is None)
 
                 if compute_sensitivities and i == 0:
-                    print("Computing forward & sensitivities:")
+                    print("Computing forward & sensitivities")
 
                 try:
                     client = get_client()
@@ -144,11 +144,12 @@ def get_dpred(self, m, f=None, compute_J=False):
                             if compute_sensitivities:
                                 runtime = time() - ct
                                 total = len(self.dmisfit.objfcts)
-                                print(
-                                    f"{i+1} of {total} "
-                                    f"in {timedelta(seconds=runtime)}. "
-                                    f"ETA -> {timedelta(seconds=(total - i - 1) * runtime)}"
-                                )
+
+                                message = f"{i+1} of {total} in {timedelta(seconds=runtime)}. "
+                                if (total - i - 1) > 0:
+                                    message += f"ETA -> {timedelta(seconds=(total - i - 1) * runtime)}"
+                                print(message)
+
                 dpreds += [future]
 
             else:

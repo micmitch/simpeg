@@ -32,7 +32,9 @@ class BaseDCSimulation2D(BaseEMSimulation):
     fieldsPair = Fields2D  # SimPEG.EM.Static.Fields_2D
     fieldsPair_fwd = FieldsDC
     # there's actually nT+1 fields, so we don't need to store the last one
+    Ainv = None
     _Jmatrix = None
+    gtgdiag = None
     fix_Jmatrix = False
     _mini_survey = None
 
@@ -182,6 +184,25 @@ class BaseDCSimulation2D(BaseEMSimulation):
                 f = self.fields(m)
             self._Jmatrix = (self._Jtvec(m, v=None, f=f)).T
         return self._Jmatrix
+
+    def getJtJdiag(self, m, W=None):
+        """
+        Return the diagonal of JtJ
+        """
+        if self.gtgdiag is None:
+            J = self.getJ(m)
+
+            if W is None:
+                W = np.ones(J.shape[0])
+            else:
+                W = W.diagonal() ** 2
+
+            diag = np.zeros(J.shape[1])
+            for i in range(J.shape[0]):
+                diag += (W[i]) * (J[i] * J[i])
+
+            self.gtgdiag = diag
+        return self.gtgdiag
 
     def Jvec(self, m, v, f=None):
         """

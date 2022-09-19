@@ -126,29 +126,37 @@ def get_dpred(self, m, f=None, compute_J=False):
                 except ValueError:
                     # For locals, the future is now
                     ct = time()
-                    future = objfct.simulation.dpred(
-                        vec, compute_J=compute_sensitivities
-                    )
-                    if isinstance(future, (da.Array, Delayed)):
-                        if (
-                            (
-                                objfct.simulation.store_sensitivities == "forward_only"
-                                or compute_sensitivities
-                            )
-                            and objfct.simulation.verbose
-                        ):
-                            with ProgressBar():
-                                future = future.compute()
-                        else:
-                            future = future.compute()
-                            if compute_sensitivities:
-                                runtime = time() - ct
-                                total = len(self.dmisfit.objfcts)
+                    if objfct.simulation.verbose and (compute_sensitivities or objfct.simulation.store_sensitivities == "forward_only"):
+                        with ProgressBar():
+                            future = da.compute(objfct.simulation.dpred(
+                                vec, compute_J=compute_sensitivities
+                            ))[0]
+                    else:
+                        future = da.compute(objfct.simulation.dpred(
+                            vec, compute_J=compute_sensitivities
+                        ))[0]
+                    # if isinstance(future, (da.Array, Delayed)):
+                    #     # if (
+                    #     #     (
+                    #     #         objfct.simulation.store_sensitivities == "forward_only"
+                    #     #         or compute_sensitivities
+                    #     #     )
+                    #     #     and objfct.simulation.verbose
+                    #     # ):
+                    #     with ProgressBar():
+                    #         if objfct.simulation.store_sensitivities == "ram":
+                    #             future = future.persist()
+                    #         else:
+                    #             future = future.compute()
 
-                                message = f"{i+1} of {total} in {timedelta(seconds=runtime)}. "
-                                if (total - i - 1) > 0:
-                                    message += f"ETA -> {timedelta(seconds=(total - i - 1) * runtime)}"
-                                print(message)
+                    if compute_sensitivities and objfct.simulation.verbose:
+                        runtime = time() - ct
+                        total = len(self.dmisfit.objfcts)
+
+                        message = f"{i+1} of {total} in {timedelta(seconds=runtime)}. "
+                        if (total - i - 1) > 0:
+                            message += f"ETA -> {timedelta(seconds=(total - i - 1) * runtime)}"
+                        print(message)
 
                 dpreds += [future]
 

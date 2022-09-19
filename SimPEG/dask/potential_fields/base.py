@@ -4,7 +4,6 @@ import numpy as np
 from ...potential_fields.base import BasePFSimulation as Sim
 import os
 from dask import delayed, array, config
-from dask.diagnostics import ProgressBar
 from zarr.errors import ArrayNotFoundError
 from ..utils import compute_chunk_sizes
 from dask.distributed import get_client, Future, Client
@@ -67,8 +66,8 @@ def linear_operator(self):
         config.set({"array.chunk-size": f"{self.max_chunk_size}MiB"})
         stack = stack.rechunk({0: -1, 1: "auto"})
 
-    if self.store_sensitivities not in ["disk", "forward_only"]:
-        return array.asarray(stack)
+    if self.store_sensitivities in ["ram", "forward_only"]:
+        return stack
 
     print("Saving sensitivities to zarr: " + sens_name)
     kernel = array.to_zarr(
@@ -84,37 +83,42 @@ Sim.linear_operator = linear_operator
 @property
 def Jmatrix(self):
     if getattr(self, "_Jmatrix", None) is None:
-        if self.store_sensitivities == "ram":
-            self._Jmatrix = np.asarray(self.linear_operator())
-        else:
-            try:
-                client = get_client()
-                workers = self.workers if isinstance(self.workers, tuple) else None
-                self.Xn, self.Yn, self.Zn = client.scatter(
-                    [self.Xn, self.Yn, self.Zn], workers=workers
+        try:
+            client = get_client()
+            workers = self.workers if isinstance(self.workers, tuple) else None
+            self.Xn, self.Yn, self.Zn = client.scatter(
+                [self.Xn, self.Yn, self.Zn], workers=workers
+            )
+            if self.store_sensitivities == "ram":
+                self._Jmatrix = client.persist(
+                    self.linear_operator(),
+                    workers=workers
                 )
-
-                # if getattr(self, "tmi_projection", None) is not None:
-                #     self._tmi_projection = client.scatter(
-                #         [self.tmi_projection], workers=workers
-                #     )
-                #
-                # if getattr(self, "M", None) is not None:
-                #     self._M = client.scatter(
-                #         [self._M], workers=workers
-                #     )
-
+            else:
                 self._Jmatrix = client.compute(
                         self.linear_operator(),
                     workers=workers
                 )
-            except ValueError:
-                delayed_array = self.linear_operator()
+        except ValueError:
+            delayed_array = self.linear_operator()
 
-                if "store-map" not in delayed_array.name:
-                    self._Jmatrix = delayed_array
-                else:
-                    return delayed_array
+            if "store-map" in delayed_array.name or self.store_sensitivities == "forward_only":
+                return delayed_array
+
+            if self.store_sensitivities == "ram":
+                self._Jmatrix = np.asarray(delayed_array.persist())
+            else:
+                self._Jmatrix = delayed_array
+
+            # elif self.store_sensitivities == "forward_only":
+            #     return delayed_array
+            # else:
+            #
+
+            # if "store-map" not in delayed_array.name:
+            #     self._Jmatrix = delayed_array
+            # else:
+            #     return delayed_array
 
     elif isinstance(self._Jmatrix, Future):
         self._Jmatrix.result()

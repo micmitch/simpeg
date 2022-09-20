@@ -106,7 +106,7 @@ def Jmatrix(self):
                 return delayed_array
 
             if self.store_sensitivities == "ram":
-                self._Jmatrix = np.asarray(delayed_array.persist())
+                self._Jmatrix = delayed_array.persist()
             else:
                 self._Jmatrix = delayed_array
 

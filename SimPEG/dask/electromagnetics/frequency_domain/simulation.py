@@ -100,12 +100,15 @@ def compute_J(self, f=None, Ainv=None):
     row_chunks = int(np.ceil(
         float(self.survey.nD) / np.ceil(float(m_size) * self.survey.nD * 8. * 1e-6 / self.max_chunk_size)
     ))
-    Jmatrix = zarr.open(
-        self.sensitivity_path + f"J.zarr",
-        mode='w',
-        shape=(self.survey.nD, m_size),
-        chunks=(row_chunks, m_size)
-    )
+    if self.store_sensitivities == "disk":
+        Jmatrix = zarr.open(
+            self.sensitivity_path + f"J.zarr",
+            mode='w',
+            shape=(self.survey.nD, m_size),
+            chunks=(row_chunks, m_size)
+        )
+    else:
+        Jmatrix = np.zeros((self.survey.nD, m_size), dtype=np.float32)
 
     def eval_store_block(A, freq, df_duT, df_dmT, u_src, src, row_count):
         """
@@ -122,10 +125,17 @@ def compute_J(self, f=None, Ainv=None):
             du_dmT += np.hstack(df_dmT)
 
         block = np.array(du_dmT, dtype=complex).real.T
-        Jmatrix.set_orthogonal_selection(
-            (np.arange(row_count, row_count + block.shape[0]), slice(None)),
-            block
-        )
+
+        if self.store_sensitivities == "disk":
+            Jmatrix.set_orthogonal_selection(
+                (np.arange(row_count, row_count + block.shape[0]), slice(None)),
+                block.astype(np.float32)
+            )
+        else:
+            Jmatrix[row_count: row_count + block.shape[0], :] = (
+                block.astype(np.float32)
+            )
+
         row_count += block.shape[0]
         return row_count
 
@@ -163,16 +173,23 @@ def compute_J(self, f=None, Ainv=None):
                 block_count = 0
 
     if len(blocks) != 0:
-        Jmatrix.set_orthogonal_selection(
-            (np.arange(count, self.survey.nD), slice(None)),
-            blocks
-        )
+        if self.store_sensitivities == "disk":
+            Jmatrix.set_orthogonal_selection(
+                (np.arange(count, self.survey.nD), slice(None)),
+                blocks.astype(np.float32)
+            )
+        else:
+            Jmatrix[count: self.survey.nD, :] = (
+                blocks.astype(np.float32)
+            )
 
-    del Jmatrix
-    for A in Ainv:
-        A.clean()
+    Ainv.clean()
 
-    return da.from_zarr(self.sensitivity_path + f"J.zarr")
+    if self.store_sensitivities == "disk":
+        del Jmatrix
+        return da.from_zarr(self.sensitivity_path + f"J.zarr")
+    else:
+        return Jmatrix
 
 
 Sim.compute_J = compute_J

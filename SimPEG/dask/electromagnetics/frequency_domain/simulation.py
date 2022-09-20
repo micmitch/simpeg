@@ -183,7 +183,8 @@ def compute_J(self, f=None, Ainv=None):
                 blocks.astype(np.float32)
             )
 
-    Ainv.clean()
+    for A in Ainv:
+        A.clean()
 
     if self.store_sensitivities == "disk":
         del Jmatrix

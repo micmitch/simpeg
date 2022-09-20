@@ -95,7 +95,7 @@ def dask_dpred(self, m=None, f=None, compute_J=False):
     data = self.Jvec(m, m)
 
     if compute_J:
-        return mkvc(data), Jmatrix
+        return np.asarray(data), Jmatrix
 
     return np.asarray(data)
 

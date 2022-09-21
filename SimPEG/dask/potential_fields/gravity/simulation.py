@@ -75,10 +75,10 @@ def dask_getJtJdiag(self, m, W=None):
         W = W.diagonal()
 
     if getattr(self, "_gtg_diagonal", None) is None:
-        diag = np.einsum('i,ij,ij->j', W, self.G, self.G)
+        diag = array.einsum('i,ij,ij->j', W, self.G, self.G)
 
         if isinstance(diag, array.Array):
-            diag = diag.compute()
+            diag = np.asarray(diag.compute())
 
         self._gtg_diagonal = diag
 

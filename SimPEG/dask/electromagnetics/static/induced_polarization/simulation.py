@@ -111,14 +111,18 @@ def dask_getJtJdiag(self, m, W=None):
     if self.gtgdiag is None:
         if isinstance(self.Jmatrix, Future):
             self.Jmatrix  # Wait to finish
-        # Need to check if multiplying weights makes sense
-        if W is None:
-            w = self._scale ** 2
-        else:
-            w = (self._scale * W.diagonal()) ** 2
 
-        w = da.from_array(W.diagonal(), chunks='auto')[:, None]
-        self.gtgdiag = da.sum((w * self.Jmatrix) ** 2, axis=0).compute()
+        if W is None:
+            W = self._scale * np.ones(self.nD)
+        else:
+            W = self._scale * W.diagonal()
+
+        diag = da.einsum('i,ij,ij->j', W, self.Jmatrix, self.Jmatrix)
+
+        if isinstance(diag, da.Array):
+            diag = np.asarray(diag.compute())
+
+        self.gtgdiag = diag
 
     return self.gtgdiag
 

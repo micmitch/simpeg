@@ -135,19 +135,6 @@ def get_dpred(self, m, f=None, compute_J=False):
                         future = da.compute(objfct.simulation.dpred(
                             vec, compute_J=compute_sensitivities
                         ))[0]
-                    # if isinstance(future, (da.Array, Delayed)):
-                    #     # if (
-                    #     #     (
-                    #     #         objfct.simulation.store_sensitivities == "forward_only"
-                    #     #         or compute_sensitivities
-                    #     #     )
-                    #     #     and objfct.simulation.verbose
-                    #     # ):
-                    #     with ProgressBar():
-                    #         if objfct.simulation.store_sensitivities == "ram":
-                    #             future = future.persist()
-                    #         else:
-                    #             future = future.compute()
 
                     if compute_sensitivities and objfct.simulation.verbose:
                         runtime = time() - ct

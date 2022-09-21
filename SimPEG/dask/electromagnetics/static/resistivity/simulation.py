@@ -61,7 +61,7 @@ def dask_getJtJdiag(self, m, W=None):
             diag = np.asarray(diag.compute())
 
         self.gtgdiag = diag
-        
+
     return self.gtgdiag
 
 

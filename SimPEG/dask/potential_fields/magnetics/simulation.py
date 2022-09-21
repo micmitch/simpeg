@@ -90,7 +90,6 @@ def dask_getJtJdiag(self, m, W=None):
 
         self._gtg_diagonal = diag
 
-
     return mkvc((sdiag(np.sqrt(self._gtg_diagonal)) @ self.chiDeriv).power(2).sum(axis=0))
 
 

@@ -116,14 +116,14 @@ def get_dpred(self, m, f=None, compute_J=False):
                 if compute_sensitivities and i == 0:
                     print("Computing forward & sensitivities")
 
-                try:
+                if objfct.workers is not None:
                     client = get_client()
                     future = client.compute(
                         objfct.simulation.dpred(
                             vec, compute_J=compute_sensitivities
                         ), workers=objfct.workers
                     )
-                except ValueError:
+                else:
                     # For locals, the future is now
                     ct = time()
                     if objfct.simulation.verbose and (compute_sensitivities or objfct.simulation.store_sensitivities == "forward_only"):

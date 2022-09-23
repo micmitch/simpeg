@@ -84,18 +84,15 @@ def dask_dpred(self, m=None, f=None, compute_J=False):
             "simulation.survey = survey"
         )
     if self._Jmatrix is None or self._scale is None:
-        if f is None:
-            if m is None:
-                m = self.model
-            f, Ainv = self.fields(m, return_Ainv=compute_J)
-
-        if compute_J:
-            Jmatrix = self.compute_J(f=f, Ainv=Ainv)
+        if m is None:
+            m = self.model
+        f, Ainv = self.fields(m, return_Ainv=True)
+        self._Jmatrix = self.compute_J(f=f, Ainv=Ainv)
 
     data = self.Jvec(m, m)
 
     if compute_J:
-        return np.asarray(data), Jmatrix
+        return np.asarray(data), self._Jmatrix
 
     return np.asarray(data)
 

@@ -63,7 +63,6 @@ def dask_fields(self, m=None, return_Ainv=False):
 Sim.fields = dask_fields
 
 
-@dask.delayed
 def dask_dpred(self, m=None, f=None, compute_J=False):
     """
     dpred(m, f=None)

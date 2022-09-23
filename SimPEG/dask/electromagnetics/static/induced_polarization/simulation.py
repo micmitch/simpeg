@@ -63,7 +63,6 @@ def dask_fields(self, m=None, return_Ainv=False):
 Sim.fields = dask_fields
 
 
-@dask.delayed
 def dask_dpred(self, m=None, f=None, compute_J=False):
     """
     dpred(m, f=None)
@@ -84,18 +83,15 @@ def dask_dpred(self, m=None, f=None, compute_J=False):
             "simulation.survey = survey"
         )
     if self._Jmatrix is None or self._scale is None:
-        if f is None:
-            if m is None:
-                m = self.model
-            f, Ainv = self.fields(m, return_Ainv=compute_J)
-
-        if compute_J:
-            Jmatrix = self.compute_J(f=f, Ainv=Ainv)
+        if m is None:
+            m = self.model
+        f, Ainv = self.fields(m, return_Ainv=True)
+        self._Jmatrix = self.compute_J(f=f, Ainv=Ainv)
 
     data = self.Jvec(m, m)
 
     if compute_J:
-        return (np.asarray(data), Jmatrix)
+        return np.asarray(data), self._Jmatrix
 
     return np.asarray(data)
 
@@ -111,14 +107,18 @@ def dask_getJtJdiag(self, m, W=None):
     if self.gtgdiag is None:
         if isinstance(self.Jmatrix, Future):
             self.Jmatrix  # Wait to finish
-        # Need to check if multiplying weights makes sense
-        if W is None:
-            w = self._scale ** 2
-        else:
-            w = (self._scale * W.diagonal()) ** 2
 
-        w = da.from_array(W.diagonal(), chunks='auto')[:, None]
-        self.gtgdiag = da.sum((w * self.Jmatrix) ** 2, axis=0).compute()
+        if W is None:
+            W = self._scale * np.ones(self.nD)
+        else:
+            W = self._scale * W.diagonal()
+
+        diag = da.einsum('i,ij,ij->j', W, self.Jmatrix, self.Jmatrix)
+
+        if isinstance(diag, da.Array):
+            diag = np.asarray(diag.compute())
+
+        self.gtgdiag = diag
 
     return self.gtgdiag
 

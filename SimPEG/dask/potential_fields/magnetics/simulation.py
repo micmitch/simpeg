@@ -75,7 +75,7 @@ def dask_getJtJdiag(self, m, W=None):
         self.Jmatrix  # Wait to finish
     if getattr(self, "_gtg_diagonal", None) is None:
         if not self.is_amplitude_data:
-            diag = np.einsum('i,ij,ij->j', W, self.G, self.G)
+            diag = array.einsum('i,ij,ij->j', W, self.G, self.G)
         else:  # self.modelType is amplitude
             fieldDeriv = self.fieldDeriv
             J = (
@@ -86,10 +86,9 @@ def dask_getJtJdiag(self, m, W=None):
             diag = ((W[:, None] * J) ** 2).sum(axis=0)
 
         if isinstance(diag, array.Array):
-            diag = diag.compute()
+            diag = np.asarray(diag.compute())
 
         self._gtg_diagonal = diag
-
 
     return mkvc((sdiag(np.sqrt(self._gtg_diagonal)) @ self.chiDeriv).power(2).sum(axis=0))
 

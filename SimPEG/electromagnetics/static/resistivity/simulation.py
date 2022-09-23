@@ -19,7 +19,7 @@ class BaseDCSimulation(BaseEMSimulation):
 
     survey = properties.Instance("a DC survey object", Survey, required=True)
 
-    store_sensitivities = properties.Bool("store the sensitivity matrix?", default=False)
+    store_sensitivities = False
 
     _mini_survey = None
 

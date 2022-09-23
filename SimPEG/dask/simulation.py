@@ -146,19 +146,23 @@ def Jmatrix(self):
         if self.workers is None:
             self._Jmatrix = self.compute_J()
         else:
-            try:
-                client = get_client()
-            except ValueError:
-                client = Client()
+            client = get_client()  # Assumes a Client already exists
 
-            self._Jmatrix = client.compute(
+            if self.store_sensitivities == "ram":
+                self._Jmatrix = client.persist(
                     delayed(self.compute_J)(),
-                workers=self.workers
-            )
+                    workers=self.workers
+                )
+            else:
+                self._Jmatrix = client.compute(
+                    delayed(self.compute_J)(),
+                    workers=self.workers
+                )
+
     elif isinstance(self._Jmatrix, Future):
-        # client = get_client()
         self._Jmatrix.result()
-        self._Jmatrix = array.from_zarr(self.sensitivity_path + f"J.zarr")
+        if self.store_sensitivities == "disk":
+            self._Jmatrix = array.from_zarr(self.sensitivity_path + f"J.zarr")
 
     return self._Jmatrix
 

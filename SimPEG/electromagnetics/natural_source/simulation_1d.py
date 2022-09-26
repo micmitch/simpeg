@@ -58,7 +58,7 @@ class Simulation1DRecursive(BaseEMSimulation):
     # Storing sensitivity
     _Jmatrix = None
     fix_Jmatrix = False
-    store_sensitivities = properties.Bool("store the sensitivity", default=False)
+    store_sensitivities = False
 
     # Frequency for each datum
     _frequency_vector = None

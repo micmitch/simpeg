@@ -68,7 +68,7 @@ def dask_getJtJdiag(self, m, W=None):
 Sim.getJtJdiag = dask_getJtJdiag
 
 
-def dask_Jvec(self, m, v):
+def dask_Jvec(self, m, v, f=None):
     """
         Compute sensitivity matrix (J) and vector (v) product.
     """
@@ -82,7 +82,7 @@ def dask_Jvec(self, m, v):
 Sim.Jvec = dask_Jvec
 
 
-def dask_Jtvec(self, m, v):
+def dask_Jtvec(self, m, v, f=None):
     """
         Compute adjoint sensitivity matrix (J^T) and vector (v) product.
     """

@@ -260,7 +260,7 @@ class BetaEstimate_ByEig(InversionDirective):
             reg_eigenvalue = eigenvalue_by_power_iteration(
                 self.reg, m, n_pw_iter=self.n_pw_iter,
             )
-            self.ratio = (dm_eigenvalue / reg_eigenvalue)
+            self.ratio = np.asarray(dm_eigenvalue / reg_eigenvalue)
         else:
             x0 = np.random.rand(*m.shape)
             phi_d_deriv = self.dmisfit.deriv2(m, x0)
@@ -270,7 +270,7 @@ class BetaEstimate_ByEig(InversionDirective):
 
             self.ratio = np.asarray(t / b)
 
-        self.beta0 = self.beta0_ratio * self.ratio
+        self.beta0 = self.beta0_ratio * float(self.ratio)
         self.invProb.beta = self.beta0
 
 

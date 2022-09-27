@@ -29,7 +29,7 @@ class Simulation1DLayers(BaseEMSimulation):
 
     survey = properties.Instance("a DC survey object", Survey, required=True)
 
-    store_sensitivities = properties.Bool("store the sensitivity", default=False)
+    store_sensitivities = False
 
     data_type = "volt"
     hankel_pts_per_dec = None  # Default: Standard DLF

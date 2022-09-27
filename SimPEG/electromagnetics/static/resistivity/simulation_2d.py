@@ -23,7 +23,7 @@ class BaseDCSimulation2D(BaseEMSimulation):
 
     survey = properties.Instance("a DC survey object", Survey, required=True)
 
-    store_sensitivities = properties.Bool("store the sensitivity matrix?", default=False)
+    store_sensitivities = False
 
     nky = properties.Integer(
         "Number of kys to use in wavenumber space", required=False, default=11

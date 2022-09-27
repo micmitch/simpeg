@@ -34,7 +34,7 @@ import tarfile
 
 from discretize import TreeMesh
 from discretize.utils import mkvc, refine_tree_xyz
-
+from SimPEG import dask
 from SimPEG.utils import surface2ind_topo, model_builder
 from SimPEG import (
     maps,
@@ -287,7 +287,11 @@ starting_conductivity_model = background_conductivity * np.ones(nC)
 
 # Define the problem. Define the cells below topography and the mapping
 dc_simulation = dc.simulation_2d.Simulation2DNodal(
-    mesh, survey=dc_survey, sigmaMap=conductivity_map, Solver=Solver
+    mesh,
+    survey=dc_survey,
+    sigmaMap=conductivity_map,
+    solver=Solver,
+    store_sensitivities="ram"
 )
 
 #######################################################################
@@ -320,7 +324,7 @@ dc_regularization = regularization.Simple(
 
 # Define how the optimization problem is solved. Here we will use an inexact
 # Gauss-Newton approach.
-dc_optimization = optimization.InexactGaussNewton(maxIter=40)
+dc_optimization = optimization.ProjectedGNCG(maxIter=40)
 
 # Here we define the inverse problem that is to be solved
 dc_inverse_problem = inverse_problem.BaseInvProblem(
@@ -473,7 +477,7 @@ for ii in range(0, 3):
     cax1[ii] = fig.add_axes([0.83, 0.70 - 0.33 * ii, 0.05, 0.23])
     cplot[ii] = plot_pseudosection(
         dc_data.survey,
-        data_array[ii],
+        data_array[ii].flatten(),
         "contourf",
         ax=ax1[ii],
         cax=cax1[ii],
@@ -526,6 +530,7 @@ ip_simulation = ip.simulation_2d.Simulation2DNodal(
     etaMap=chargeability_map,
     sigma=conductivity_map * recovered_conductivity_model,
     Solver=Solver,
+    store_sensitivities="ram"
 )
 
 #####################################################
@@ -567,7 +572,7 @@ ip_inverse_problem = inverse_problem.BaseInvProblem(
 #
 
 update_sensitivity_weighting = directives.UpdateSensitivityWeights(threshold=1e-3)
-starting_beta = directives.BetaEstimate_ByEig(beta0_ratio=1e1)
+starting_beta = directives.BetaEstimate_ByEig(beta0_ratio=1e2)
 beta_schedule = directives.BetaSchedule(coolingFactor=2, coolingRate=1)
 save_iteration = directives.SaveOutputEveryIteration(save_txt=False)
 target_misfit = directives.TargetMisfit(chifact=1.0)
@@ -673,7 +678,7 @@ std_ip = ip_data.standard_deviation
 
 # Plot
 fig = plt.figure(figsize=(9, 13))
-data_array = [dobs_ip, dpred_ip, (dobs_ip - dpred_ip) / std_ip]
+data_array = [dobs_ip, np.asarray(dpred_ip), (dobs_ip - dpred_ip) / std_ip]
 plot_title = [
     "Observed (as app. chg.)",
     "Predicted (as app. chg.)",
@@ -692,7 +697,7 @@ for ii in range(0, 3):
     cax1[ii] = fig.add_axes([0.81, 0.72 - 0.33 * ii, 0.03, 0.21])
     cplot[ii] = plot_pseudosection(
         ip_data.survey,
-        data_array[ii],
+        data_array[ii].flatten(),
         "contourf",
         ax=ax1[ii],
         cax=cax1[ii],

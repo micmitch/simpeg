@@ -20,7 +20,6 @@ numcodecs.blosc.use_threads = False
 Sim.sensitivity_path = './sensitivity/'
 
 from ..resistivity.simulation import (
-    dask_fields, dask_getJtJdiag, dask_Jvec, dask_Jtvec,
     compute_J, dask_getSourceTerm,
 )
 
@@ -126,11 +125,15 @@ def dask_getJtJdiag(self, m, W=None):
 Sim.getJtJdiag = dask_getJtJdiag
 
 
-def dask_Jvec(self, m, v):
+def dask_Jvec(self, m, v, f=None):
     """
         Compute sensitivity matrix (J) and vector (v) product.
     """
     self.model = m
+
+    if isinstance(self.Jmatrix, np.ndarray):
+        return self._scale.astype(np.float32) * (self.Jmatrix @ v.astype(np.float32))
+
     if isinstance(self.Jmatrix, Future):
         self.Jmatrix  # Wait to finish
 
@@ -140,11 +143,15 @@ def dask_Jvec(self, m, v):
 Sim.Jvec = dask_Jvec
 
 
-def dask_Jtvec(self, m, v):
+def dask_Jtvec(self, m, v, f=None):
     """
         Compute adjoint sensitivity matrix (J^T) and vector (v) product.
     """
     self.model = m
+
+    if isinstance(self.Jmatrix, np.ndarray):
+        return (self._scale * v.astype(np.float32)).astype(np.float32) @ self.Jmatrix
+
     if isinstance(self.Jmatrix, Future):
         self.Jmatrix  # Wait to finish
 
@@ -152,35 +159,3 @@ def dask_Jtvec(self, m, v):
 
 Sim.Jtvec = dask_Jtvec
 
-#
-# if m is not None:
-#     self.model = m
-#     # sensitivity matrix is fixed
-#     # self._Jmatrix = None
-#
-# if self._f is None:
-#     if self.verbose is True:
-#         print(">> Solve DC problem")
-#     self._f = super().fields(m=None)
-#
-# if self._scale is None:
-#     scale = Data(self.survey, np.full(self.survey.nD, self._sign))
-#     # loop through receievers to check if they need to set the _dc_voltage
-#     for src in self.survey.source_list:
-#         for rx in src.receiver_list:
-#             if (
-#                     rx.data_type == "apparent_chargeability"
-#                     or self._data_type == "apparent_chargeability"
-#             ):
-#                 scale[src, rx] = self._sign / rx.eval(src, self.mesh, self._f)
-#     self._scale = scale.dobs
-#
-# if self.verbose is True:
-#     print(">> Compute predicted data")
-#
-# self._pred = self.forward(m, f=self._f)
-#
-# # if not self.storeJ:
-# #     self.Ainv.clean()
-#
-# return self._f

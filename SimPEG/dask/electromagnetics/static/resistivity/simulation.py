@@ -75,7 +75,7 @@ def dask_Jvec(self, m, v, f=None):
     self.model = m
 
     if isinstance(self.Jmatrix, np.ndarray):
-        return self.Jmatrix * v
+        return self.Jmatrix @ v.astype(np.float32)
 
     if isinstance(self.Jmatrix, Future):
         self.Jmatrix  # Wait to finish
@@ -93,7 +93,7 @@ def dask_Jtvec(self, m, v, f=None):
     self.model = m
 
     if isinstance(self.Jmatrix, np.ndarray):
-        return v * self.Jmatrix
+        return self.Jmatrix.T @ v.astype(np.float32)
 
     if isinstance(self.Jmatrix, Future):
         self.Jmatrix  # Wait to finish

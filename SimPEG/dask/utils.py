@@ -29,6 +29,8 @@ def compute(self, job):
     """
     Compute dask job for either dask array or client.
     """
+    if isinstance(job, np.ndarray):
+        return job
     try:
         client = get_client()
         return client.compute(job, workers=self.workers)

@@ -130,6 +130,10 @@ def dask_Jvec(self, m, v, f=None):
         Compute sensitivity matrix (J) and vector (v) product.
     """
     self.model = m
+
+    if isinstance(self.Jmatrix, np.ndarray):
+        return self._scale.astype(np.float32) * self.Jmatrix * v.astype(np.float32)
+
     if isinstance(self.Jmatrix, Future):
         self.Jmatrix  # Wait to finish
 
@@ -144,6 +148,10 @@ def dask_Jtvec(self, m, v, f=None):
         Compute adjoint sensitivity matrix (J^T) and vector (v) product.
     """
     self.model = m
+
+    if isinstance(self.Jmatrix, np.ndarray):
+        return (self._scale * v.astype(np.float32)).astype(np.float32) * self.Jmatrix
+
     if isinstance(self.Jmatrix, Future):
         self.Jmatrix  # Wait to finish
 

@@ -31,7 +31,7 @@ def dask_deriv(self, m, f=None):
         m = self.model_map @ m
 
     wtw_d = self.W.diagonal() ** 2.0 * self.residual(m, f=f)
-    Jtvec = self.simulation.Jtvec(m, wtw_d)
+    Jtvec = compute(self, self.simulation.Jtvec(m, wtw_d))
 
     if getattr(self, "model_map", None) is not None:
         Jtjvec_dmudm = delayed(csr.dot)(Jtvec, self.model_map.deriv(m))
@@ -59,9 +59,9 @@ def dask_deriv2(self, m, v, f=None):
         m = self.model_map @ m
         v = self.model_map.deriv(m) @ v
 
-    jvec = self.simulation.Jvec(m, v)
+    jvec = compute(self, self.simulation.Jvec(m, v))
     w_jvec = self.W.diagonal() ** 2.0 * jvec
-    jtwjvec = self.simulation.Jtvec(m, w_jvec)
+    jtwjvec = compute(self, self.simulation.Jtvec(m, w_jvec))
 
     if getattr(self, "model_map", None) is not None:
         Jtjvec_dmudm = delayed(csr.dot)(jtwjvec, self.model_map.deriv(m))

@@ -4,12 +4,12 @@
 #parameter estimation in the context of geophysical applications.
 
 [tool.poetry]
-name = "SimPEG"
-version = "0.15.1.dev3+geoapps.0.8.0"
+name = "Mira-SimPEG"
+version = "0.15.1.dev4"
 license = "MIT"
-description = "SimPEG: Simulation and Parameter Estimation in Geophysics"
+description = "Mira Geoscience fork of SimPEG: Simulation and Parameter Estimation in Geophysics"
 
-authors = ["Rowan Cockett <rowanc1@gmail.com>"]
+authors = ["Rowan Cockett <rowanc1@gmail.com>", "dominiquef@mirageoscience.com"]
 repository = "http://github.com/simpeg/simpeg"
 documentation = "https://docs.simpeg.xyz/"
 homepage = "http://simpeg.xyz/"

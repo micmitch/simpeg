@@ -9,7 +9,7 @@ import dask.array as da
 import gc
 from ..regularization import BaseComboRegularization, Sparse
 from ..data_misfit import BaseDataMisfit
-from ..objective_function import BaseObjectiveFunction
+from ..objective_function import BaseObjectiveFunction, ComboObjectiveFunction
 
 
 def dask_getFields(self, m, store=False, deleteWarmstart=True):
@@ -190,7 +190,17 @@ def dask_evalFunction(self, m, return_g=True, return_H=True):
 
     phi_d = np.asarray(phi_d)
     # print(self.dpred[0])
-    self.reg2Deriv = [obj.deriv2(m) for obj in self.reg.objfcts]
+
+
+    if isinstance(self.reg, ComboObjectiveFunction) and not isinstance(
+            self.reg, BaseComboRegularization
+    ):
+        self.reg2Deriv = []
+        for fct in self.reg.objfcts:
+            self.reg2Deriv += [multi * obj.deriv2(m) for multi, obj in fct]
+    else:
+        self.reg2Deriv = [multi * obj.deriv2(m) for multi, obj in self.reg]
+
     # reg = np.linalg.norm(self.reg2Deriv * self.reg._delta_m(m))
     phi_m = self.reg(m)
 

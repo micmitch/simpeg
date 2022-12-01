@@ -2,7 +2,8 @@ from ....electromagnetics.frequency_domain.simulation import BaseFDEMSimulation 
 from ....utils import Zero, mkvc
 import numpy as np
 import scipy.sparse as sp
-import dask.array as da
+import multiprocessing
+from dask import array, compute, delayed
 from dask.distributed import Future
 import zarr
 from time import time
@@ -56,9 +57,9 @@ def dask_getJtJdiag(self, m, W=None):
         else:
             W = W.diagonal()
 
-        diag = da.einsum('i,ij,ij->j', W, self.Jmatrix, self.Jmatrix)
+        diag = array.einsum('i,ij,ij->j', W, self.Jmatrix, self.Jmatrix)
 
-        if isinstance(diag, da.Array):
+        if isinstance(diag, array.Array):
             diag = np.asarray(diag.compute())
 
         self.gtgdiag = diag
@@ -80,7 +81,7 @@ def dask_Jvec(self, m, v):
     if isinstance(self.Jmatrix, Future):
         self.Jmatrix  # Wait to finish
 
-    return da.dot(self.Jmatrix, v)
+    return array.dot(self.Jmatrix, v)
 
 
 Sim.Jvec = dask_Jvec
@@ -98,7 +99,7 @@ def dask_Jtvec(self, m, v):
     if isinstance(self.Jmatrix, Future):
         self.Jmatrix  # Wait to finish
 
-    return da.dot(v, self.Jmatrix)
+    return array.dot(v, self.Jmatrix)
 
 
 Sim.Jtvec = dask_Jtvec
@@ -127,8 +128,7 @@ def compute_J(self, f=None, Ainv=None):
         """
         Evaluate the sensitivities for the block or data and store to zarr
         """
-        df_duT = np.hstack(df_duT)
-        ATinvdf_duT = (A * df_duT).reshape((dfduT.shape[0], -1))
+        ATinvdf_duT = (A * np.hstack(df_duT)).reshape((df_duT[0].shape[0], -1))
         dA_dmT = self.getADeriv(freq, u_src, ATinvdf_duT, adjoint=True)
         dRHS_dmT = self.getRHSDeriv(freq, src, ATinvdf_duT, adjoint=True)
         du_dmT = -dA_dmT
@@ -152,56 +152,79 @@ def compute_J(self, f=None, Ainv=None):
         row_count += block.shape[0]
         return row_count
 
-    blocks = []
+
+    def evaluate_receiver(source, receiver, mesh, fields, block):
+        dfduT, dfdmT = receiver.evalDeriv(
+            source, mesh, fields, v=block, adjoint=True
+        )
+
+        return dfduT, dfdmT
+
+
+
     count = 0
     block_count = 0
     for A_i, freq in zip(Ainv, self.survey.frequencies):
 
         for src in self.survey.get_sources_by_frequency(freq):
             df_duT, df_dmT = [], []
+            blocks = []
             u_src = f[src, self._solutionType]
 
             for rx in src.receiver_list:
                 v = np.eye(rx.nD, dtype=float)
-                n_blocs = np.ceil(2 * rx.nD / row_chunks)
+                n_blocs = np.ceil(2 * rx.nD / row_chunks * (int(multiprocessing.cpu_count() / 2)))
 
                 for block in np.array_split(v, n_blocs, axis=1):
 
-                    dfduT, dfdmT = rx.evalDeriv(
-                        src, self.mesh, f, v=block, adjoint=True
-                    )
-                    df_duT += [dfduT]
-                    df_dmT += [dfdmT]
-
-                    block_count += dfduT.shape[1]
+                    block_count += block.shape[1] * 2
+                    blocks.append(delayed(evaluate_receiver, pure=True)(src, rx, self.mesh, f, block))
 
                     if block_count >= row_chunks:
-                        count = eval_store_block(A_i, freq, df_duT, df_dmT, u_src, src, count)
-                        df_duT, df_dmT = [], []
+                        field_derivs = compute(blocks)[0]
+                        count = eval_store_block(
+                            A_i,
+                            freq,
+                            [deriv[0] for deriv in field_derivs],
+                            [deriv[1] for deriv in field_derivs],
+                            u_src,
+                            src,
+                            count
+                        )
+                        blocks = []
                         block_count = 0
                         # blocks, count = store_block(blocks, count)
 
             if df_duT:
-                count = eval_store_block(A_i, freq, df_duT, df_dmT, u_src, src, count)
+                field_derivs = compute(blocks)[0]
+                count = eval_store_block(
+                    A_i,
+                    freq,
+                    [deriv[0] for deriv in field_derivs],
+                    [deriv[1] for deriv in field_derivs],
+                    u_src,
+                    src,
+                    count
+                )
                 block_count = 0
 
-    if len(blocks) != 0:
-        if self.store_sensitivities == "disk":
-            Jmatrix.set_orthogonal_selection(
-                (np.arange(count, self.survey.nD), slice(None)),
-                blocks.astype(np.float32)
-            )
-        else:
-            Jmatrix[count: self.survey.nD, :] = (
-                blocks.astype(np.float32)
-            )
+    # if len(blocks) != 0:
+    #     if self.store_sensitivities == "disk":
+    #         Jmatrix.set_orthogonal_selection(
+    #             (np.arange(count, self.survey.nD), slice(None)),
+    #             blocks.astype(np.float32)
+    #         )
+    #     else:
+    #         Jmatrix[count: self.survey.nD, :] = (
+    #             blocks.astype(np.float32)
+    #         )
 
     for A in Ainv:
         A.clean()
 
     if self.store_sensitivities == "disk":
         del Jmatrix
-        return da.from_zarr(self.sensitivity_path + f"J.zarr")
+        return array.from_zarr(self.sensitivity_path + f"J.zarr")
     else:
         return Jmatrix
 

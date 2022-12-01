@@ -196,16 +196,26 @@ def dask_dpred(self, m=None, f=None, compute_J=False):
             m = self.model
         f, Ainv = self.fields(m, return_Ainv=compute_J)
 
-    data = Data(self.survey)
+    def evaluate_receiver(source, receiver, mesh, fields):
+        return receiver.eval(source, mesh, fields)
+
+    row = delayed(evaluate_receiver, pure=True)
+    rows = []
     for src in self.survey.source_list:
         for rx in src.receiver_list:
-            data[src, rx] = rx.eval(src, self.mesh, f)
+            rows.append(array.from_delayed(
+                row(src, rx, self.mesh, f),
+                dtype=np.float32,
+                shape=(rx.nD,),
+            ))
 
-    if compute_J:
+    data = array.hstack(rows).compute()
+
+    if compute_J and self._Jmatrix is None:
         Jmatrix = self.compute_J(f=f, Ainv=Ainv)
-        return (mkvc(data), Jmatrix)
+        return data, Jmatrix
 
-    return mkvc(data)
+    return data
 
 
 Sim.dpred = dask_dpred

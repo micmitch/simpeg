@@ -1,5 +1,6 @@
 from ....electromagnetics.frequency_domain.simulation import BaseFDEMSimulation as Sim
 from ....utils import Zero, mkvc
+from  time import time
 import numpy as np
 import scipy.sparse as sp
 import multiprocessing
@@ -166,11 +167,11 @@ def compute_J(self, f=None, Ainv=None):
     block_count = 0
     for A_i, freq in zip(Ainv, self.survey.frequencies):
 
-        for src in self.survey.get_sources_by_frequency(freq):
+        for ss, src in enumerate(self.survey.get_sources_by_frequency(freq)):
             df_duT, df_dmT = [], []
             blocks = []
             u_src = f[src, self._solutionType]
-
+            ct = time()
             for rx in src.receiver_list:
                 v = np.eye(rx.nD, dtype=float)
                 n_blocs = np.ceil(2 * rx.nD / row_chunks * (int(multiprocessing.cpu_count() / 2)))
@@ -181,6 +182,7 @@ def compute_J(self, f=None, Ainv=None):
                     blocks.append(delayed(evaluate_receiver, pure=True)(src, rx, self.mesh, f, block))
 
                     if block_count >= (row_chunks * multiprocessing.cpu_count() / 2):
+                        print(f"{ss}: Block {count}: {time()-time}")
                         field_derivs = compute(blocks)[0]
                         count = eval_store_block(
                             A_i,

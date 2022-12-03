@@ -126,53 +126,6 @@ def compute_J(self, f=None, Ainv=None):
     else:
         Jmatrix = np.zeros((self.survey.nD, m_size), dtype=np.float32)
 
-    def eval_store_block(ATinvdf_duT, freq, df_dmT, u_src, src, row_count):
-        """
-        Evaluate the sensitivities for the block or data and store to zarr
-        """
-        print("Line 132")
-
-        print("Line 134")
-        dA_dmT = self.getADeriv(freq, u_src, ATinvdf_duT, adjoint=True)
-        print("Line 136")
-        dRHS_dmT = self.getRHSDeriv(freq, src, ATinvdf_duT, adjoint=True)
-        print("Line 138")
-        du_dmT = -dA_dmT
-        if not isinstance(dRHS_dmT, Zero):
-            du_dmT += dRHS_dmT
-        if not isinstance(df_dmT[0], Zero):
-            du_dmT += np.hstack(df_dmT)
-
-        block = np.array(du_dmT, dtype=complex).real.T
-        print("Line 146")
-        if self.store_sensitivities == "disk":
-            Jmatrix.set_orthogonal_selection(
-                (np.arange(row_count, row_count + block.shape[0]), slice(None)),
-                block.astype(np.float32)
-            )
-        else:
-            Jmatrix[row_count: row_count + block.shape[0], :] = (
-                block.astype(np.float32)
-            )
-
-        # row_count += block.shape[0]
-        # return row_count
-
-
-    def dfduT(source, receiver, mesh, fields, block):
-        dfduT, _ = receiver.evalDeriv(
-            source, mesh, fields, v=block, adjoint=True
-        )
-
-        return dfduT
-
-    def dfdmT(source, receiver, mesh, fields, block):
-        _, dfdmT = receiver.evalDeriv(
-            source, mesh, fields, v=block, adjoint=True
-        )
-
-        return dfdmT
-
     count = 0
     block_count = 0
 
@@ -199,58 +152,20 @@ def compute_J(self, f=None, Ainv=None):
                             shape=(u_src.shape[0], block.shape[1]*2)
                         )
                     )
+                    blocks_dfdmT.append(
+                            delayed(dfdmT, pure=True)(src, rx, self.mesh, f, block),
+                    )
 
                     if block_count >= (row_chunks * sub_threads):
                         print(f"{ss}: Block {count}: {time()-ct}")
-                        field_derivs = array.hstack(blocks_dfduT).compute()
-
-                        ATinvdf_duT = (A_i * field_derivs).reshape((blocks_dfduT.shape[0], -1))
-                        sub_process = []
-                        for sub_block in np.array_split(ATinvdf_duT, sub_threads, axis=1):
-                            print("Computing derivs")
-                            sub_process.append(
-                                delayed(eval_store_block, pure=True)(
-                                    freq,
-                                    sub_block,
-                                    Zero,
-                                    u_src,
-                                    src,
-                                    count
-                                )
-                            )
-                            count += sub_block.shape[1]
-                            # count = eval_store_block(
-                            #     A_i,
-                            #     freq,
-                            #     [deriv[0] for deriv in field_derivs],
-                            #     [deriv[1] for deriv in field_derivs],
-                            #     u_src,
-                            #     src,
-                            #     count
-                            # )
-                        compute(sub_process)
+                        count = parallel_block_compute(self, Jmatrix, src, A_i, freq, blocks_dfduT, blocks_dfdmT, u_src,sub_threads, count)
                         blocks_dfduT = []
+                        blocks_dfdmT = []
                         block_count = 0
                         # blocks_dfduT, count = store_block(blocks_dfduT, count)
 
             if blocks_dfduT:
-                field_derivs = array.hstack(blocks_dfduT).compute()
-                ATinvdf_duT = (A_i * field_derivs).reshape((blocks_dfduT.shape[0], -1))
-                sub_process = []
-                for sub_block in np.array_split(ATinvdf_duT, sub_threads, axis=1):
-                    print("Computing derivs")
-                    sub_process.append(
-                        delayed(eval_store_block, pure=True)(
-                            freq,
-                            sub_block,
-                            Zero,
-                            u_src,
-                            src,
-                            count
-                        )
-                    )
-                    count += sub_block.shape[1]
-                compute(sub_process)
+                count = parallel_block_compute(self, Jmatrix, src, A_i, freq, blocks_dfduT, blocks_dfdmT, u_src, sub_threads, count)
                 block_count = 0
 
     # if len(blocks) != 0:
@@ -275,3 +190,94 @@ def compute_J(self, f=None, Ainv=None):
 
 
 Sim.compute_J = compute_J
+
+
+def eval_store_block(simulation, Jmatrix, ATinvdf_duT, freq, df_dmT, u_src, src, row_count):
+    """
+    Evaluate the sensitivities for the block or data and store to zarr
+    """
+    print("Line 132")
+    dA_dmT = simulation.getADeriv(freq, u_src, ATinvdf_duT, adjoint=True)
+    print("Line 136")
+    dRHS_dmT = simulation.getRHSDeriv(freq, src, ATinvdf_duT, adjoint=True)
+    print("Line 138")
+    du_dmT = -dA_dmT
+    if not isinstance(dRHS_dmT, Zero):
+        du_dmT += dRHS_dmT
+    if not isinstance(df_dmT, Zero):
+        du_dmT += df_dmT
+
+    block = np.array(du_dmT, dtype=complex).real.T
+    print("Line 146")
+    if simulation.store_sensitivities == "disk":
+        Jmatrix.set_orthogonal_selection(
+            (np.arange(row_count, row_count + block.shape[0]), slice(None)),
+            block.astype(np.float32)
+        )
+    else:
+        Jmatrix[row_count: row_count + block.shape[0], :] = (
+            block.astype(np.float32)
+        )
+
+    # row_count += block.shape[0]
+    # return row_count
+
+
+def dfduT(source, receiver, mesh, fields, block):
+    dfduT, _ = receiver.evalDeriv(
+        source, mesh, fields, v=block, adjoint=True
+    )
+
+    return dfduT
+
+
+def dfdmT(source, receiver, mesh, fields, block):
+    _, dfdmT = receiver.evalDeriv(
+        source, mesh, fields, v=block, adjoint=True
+    )
+
+    return dfdmT
+
+
+def parallel_block_compute(simulation, Jmatrix, src, A_i, freq, blocks_dfduT, blocks_dfdmT, u_src, sub_threads, count):
+    field_derivs = array.hstack(blocks_dfduT).compute()
+
+    # Direct-solver call
+    ATinvdf_duT = A_i * field_derivs
+
+    # Even split
+    split = np.linspace(0, (ATinvdf_duT.shape[1]) / 2, sub_threads)[1:-1].astype(int) * 2
+    sub_blocks_dfduT = np.array_split(ATinvdf_duT, split, axis=1)
+
+    if isinstance(compute(blocks_dfdmT[0])[0], Zero):
+        sub_blocks_dfdmt = [Zero()] * len(sub_blocks_dfduT)
+    else:
+        compute_blocks_dfdmT = array.hstack([
+            array.from_delayed(
+                dfdmT_block,
+                dtype=np.float32,
+                shape=(u_src.shape[0], dfdmT_block.shape[1] * 2))
+            for dfdmT_block in blocks_dfdmT
+        ]).compute()
+        sub_blocks_dfdmt = np.array_split(compute_blocks_dfdmT, split, axis=1)
+
+    sub_process = []
+    for sub_block_dfduT, sub_block_dfdmT in zip(sub_blocks_dfduT, sub_blocks_dfdmt):
+        print("Computing derivs")
+        sub_process.append(
+            delayed(eval_store_block, pure=True)(
+                simulation,
+                Jmatrix,
+                sub_block_dfduT,
+                freq,
+                sub_block_dfdmT,
+                u_src,
+                src,
+                count
+            )
+        )
+        count += int(sub_block_dfduT.shape[1] / 2)
+
+    compute(sub_process)
+
+    return count

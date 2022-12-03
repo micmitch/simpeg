@@ -115,6 +115,7 @@ def compute_J(self, f=None, Ainv=None):
     row_chunks = int(np.ceil(
         float(self.survey.nD) / np.ceil(float(m_size) * self.survey.nD * 8. * 1e-6 / self.max_chunk_size)
     ))
+    sub_threads = int(multiprocessing.cpu_count() / 2)
     if self.store_sensitivities == "disk":
         Jmatrix = zarr.open(
             self.sensitivity_path + f"J.zarr",
@@ -125,12 +126,12 @@ def compute_J(self, f=None, Ainv=None):
     else:
         Jmatrix = np.zeros((self.survey.nD, m_size), dtype=np.float32)
 
-    def eval_store_block(A, freq, df_duT, df_dmT, u_src, src, row_count):
+    def eval_store_block(ATinvdf_duT, freq, df_dmT, u_src, src, row_count):
         """
         Evaluate the sensitivities for the block or data and store to zarr
         """
         print("Line 132")
-        ATinvdf_duT = (A * np.hstack(df_duT)).reshape((df_duT[0].shape[0], -1))
+
         print("Line 134")
         dA_dmT = self.getADeriv(freq, u_src, ATinvdf_duT, adjoint=True)
         print("Line 136")
@@ -154,66 +155,102 @@ def compute_J(self, f=None, Ainv=None):
                 block.astype(np.float32)
             )
 
-        row_count += block.shape[0]
-        return row_count
+        # row_count += block.shape[0]
+        # return row_count
 
 
-    def evaluate_receiver(source, receiver, mesh, fields, block):
-        dfduT, dfdmT = receiver.evalDeriv(
+    def dfduT(source, receiver, mesh, fields, block):
+        dfduT, _ = receiver.evalDeriv(
             source, mesh, fields, v=block, adjoint=True
         )
 
-        return dfduT, dfdmT
+        return dfduT
 
+    def dfdmT(source, receiver, mesh, fields, block):
+        _, dfdmT = receiver.evalDeriv(
+            source, mesh, fields, v=block, adjoint=True
+        )
 
+        return dfdmT
 
     count = 0
     block_count = 0
+
     for A_i, freq in zip(Ainv, self.survey.frequencies):
 
         for ss, src in enumerate(self.survey.get_sources_by_frequency(freq)):
             df_duT, df_dmT = [], []
-            blocks = []
+            blocks_dfduT = []
+            blocks_dfdmT = []
             u_src = f[src, self._solutionType]
             ct = time()
             print("In loop over receivers")
             for rx in src.receiver_list:
                 v = np.eye(rx.nD, dtype=float)
-                n_blocs = np.ceil(2 * rx.nD / row_chunks * (int(multiprocessing.cpu_count() / 2)))
+                n_blocs = np.ceil(2 * rx.nD / row_chunks * sub_threads)
                 print("In loop over blocks")
                 for block in np.array_split(v, n_blocs, axis=1):
 
                     block_count += block.shape[1] * 2
-                    blocks.append(delayed(evaluate_receiver, pure=True)(src, rx, self.mesh, f, block))
+                    blocks_dfduT.append(
+                        array.from_delayed(
+                            delayed(dfduT, pure=True)(src, rx, self.mesh, f, block),
+                            dtype=np.float32,
+                            shape=(u_src.shape[0], block.shape[1]*2)
+                        )
+                    )
 
-                    if block_count >= (row_chunks * multiprocessing.cpu_count() / 2):
+                    if block_count >= (row_chunks * sub_threads):
                         print(f"{ss}: Block {count}: {time()-ct}")
-                        field_derivs = compute(blocks)[0]
-                        print("Computing derivs")
-                        count = eval_store_block(
-                            A_i,
+                        field_derivs = array.hstack(blocks_dfduT).compute()
+
+                        ATinvdf_duT = (A_i * field_derivs).reshape((blocks_dfduT.shape[0], -1))
+                        sub_process = []
+                        for sub_block in np.array_split(ATinvdf_duT, sub_threads, axis=1):
+                            print("Computing derivs")
+                            sub_process.append(
+                                delayed(eval_store_block, pure=True)(
+                                    freq,
+                                    sub_block,
+                                    Zero,
+                                    u_src,
+                                    src,
+                                    count
+                                )
+                            )
+                            count += sub_block.shape[1]
+                            # count = eval_store_block(
+                            #     A_i,
+                            #     freq,
+                            #     [deriv[0] for deriv in field_derivs],
+                            #     [deriv[1] for deriv in field_derivs],
+                            #     u_src,
+                            #     src,
+                            #     count
+                            # )
+                        compute(sub_process)
+                        blocks_dfduT = []
+                        block_count = 0
+                        # blocks_dfduT, count = store_block(blocks_dfduT, count)
+
+            if blocks_dfduT:
+                field_derivs = array.hstack(blocks_dfduT).compute()
+                ATinvdf_duT = (A_i * field_derivs).reshape((blocks_dfduT.shape[0], -1))
+                sub_process = []
+                for sub_block in np.array_split(ATinvdf_duT, sub_threads, axis=1):
+                    print("Computing derivs")
+                    sub_process.append(
+                        delayed(eval_store_block, pure=True)(
                             freq,
-                            [deriv[0] for deriv in field_derivs],
-                            [deriv[1] for deriv in field_derivs],
+                            sub_block,
+                            Zero,
                             u_src,
                             src,
                             count
                         )
-                        blocks = []
-                        block_count = 0
-                        # blocks, count = store_block(blocks, count)
-
-            if blocks:
-                field_derivs = compute(blocks)[0]
-                count = eval_store_block(
-                    A_i,
-                    freq,
-                    [deriv[0] for deriv in field_derivs],
-                    [deriv[1] for deriv in field_derivs],
-                    u_src,
-                    src,
-                    count
-                )
+                    )
+                    count += sub_block.shape[1]
+                compute(sub_process)
                 block_count = 0
 
     # if len(blocks) != 0:

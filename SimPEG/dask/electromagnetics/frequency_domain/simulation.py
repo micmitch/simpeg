@@ -182,7 +182,7 @@ def compute_J(self, f=None, Ainv=None):
                     blocks.append(delayed(evaluate_receiver, pure=True)(src, rx, self.mesh, f, block))
 
                     if block_count >= (row_chunks * multiprocessing.cpu_count() / 2):
-                        print(f"{ss}: Block {count}: {time()-time}")
+                        print(f"{ss}: Block {count}: {time()-ct}")
                         field_derivs = compute(blocks)[0]
                         count = eval_store_block(
                             A_i,

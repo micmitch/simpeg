@@ -129,9 +129,13 @@ def compute_J(self, f=None, Ainv=None):
         """
         Evaluate the sensitivities for the block or data and store to zarr
         """
+        print("Line 132")
         ATinvdf_duT = (A * np.hstack(df_duT)).reshape((df_duT[0].shape[0], -1))
+        print("Line 134")
         dA_dmT = self.getADeriv(freq, u_src, ATinvdf_duT, adjoint=True)
+        print("Line 136")
         dRHS_dmT = self.getRHSDeriv(freq, src, ATinvdf_duT, adjoint=True)
+        print("Line 138")
         du_dmT = -dA_dmT
         if not isinstance(dRHS_dmT, Zero):
             du_dmT += dRHS_dmT
@@ -139,7 +143,7 @@ def compute_J(self, f=None, Ainv=None):
             du_dmT += np.hstack(df_dmT)
 
         block = np.array(du_dmT, dtype=complex).real.T
-
+        print("Line 146")
         if self.store_sensitivities == "disk":
             Jmatrix.set_orthogonal_selection(
                 (np.arange(row_count, row_count + block.shape[0]), slice(None)),

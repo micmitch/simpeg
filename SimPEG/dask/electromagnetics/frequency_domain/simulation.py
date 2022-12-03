@@ -172,10 +172,11 @@ def compute_J(self, f=None, Ainv=None):
             blocks = []
             u_src = f[src, self._solutionType]
             ct = time()
+            print("In loop over receivers")
             for rx in src.receiver_list:
                 v = np.eye(rx.nD, dtype=float)
                 n_blocs = np.ceil(2 * rx.nD / row_chunks * (int(multiprocessing.cpu_count() / 2)))
-
+                print("In loop over blocks")
                 for block in np.array_split(v, n_blocs, axis=1):
 
                     block_count += block.shape[1] * 2
@@ -184,6 +185,7 @@ def compute_J(self, f=None, Ainv=None):
                     if block_count >= (row_chunks * multiprocessing.cpu_count() / 2):
                         print(f"{ss}: Block {count}: {time()-ct}")
                         field_derivs = compute(blocks)[0]
+                        print("Computing derivs")
                         count = eval_store_block(
                             A_i,
                             freq,

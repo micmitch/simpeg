@@ -142,6 +142,7 @@ def compute_J(self, f=None, Ainv=None):
             ))
 
             ct = time()
+
             print("In loop over receivers")
             for rx in src.receiver_list:
                 v = np.eye(rx.nD, dtype=float)
@@ -163,13 +164,14 @@ def compute_J(self, f=None, Ainv=None):
 
                     if block_count >= (col_chunks * sub_threads):
                         print(f"{ss}: Block {count}: {time()-ct}")
-                        count = parallel_block_compute(self, Jmatrix, src, A_i, freq, blocks_dfduT, blocks_dfdmT, u_src,sub_threads, count)
+                        count = parallel_block_compute(self, A_i, Jmatrix, freq, u_src, src, blocks_dfduT, blocks_dfdmT, count, sub_threads, m_size)
                         blocks_dfduT = []
                         blocks_dfdmT = []
                         block_count = 0
 
             if blocks_dfduT:
-                count = parallel_block_compute(self, Jmatrix, src, A_i, freq, blocks_dfduT, blocks_dfdmT, u_src, sub_threads, count)
+                count = parallel_block_compute(
+                    self, A_i, Jmatrix, freq, u_src, src, blocks_dfduT, blocks_dfdmT, count, sub_threads, m_size)
                 block_count = 0
 
     for A in Ainv:
@@ -183,34 +185,6 @@ def compute_J(self, f=None, Ainv=None):
 
 
 Sim.compute_J = compute_J
-
-
-def eval_store_block(simulation, Jmatrix, ATinvdf_duT, freq, df_dmT, u_src, src, row_count):
-    """
-    Evaluate the sensitivities for the block or data and store to zarr
-    """
-    dA_dmT = simulation.getADeriv(freq, u_src, ATinvdf_duT, adjoint=True)
-    dRHS_dmT = simulation.getRHSDeriv(freq, src, ATinvdf_duT, adjoint=True)
-    du_dmT = -dA_dmT
-    if not isinstance(dRHS_dmT, Zero):
-        du_dmT += dRHS_dmT
-    if not isinstance(df_dmT, Zero):
-        du_dmT += df_dmT
-
-    block = np.array(du_dmT, dtype=complex).real.T
-
-    if simulation.store_sensitivities == "disk":
-        Jmatrix.set_orthogonal_selection(
-            (np.arange(row_count, row_count + block.shape[0]), slice(None)),
-            block.astype(np.float32)
-        )
-    else:
-        Jmatrix[row_count: row_count + block.shape[0], :] = (
-            block.astype(np.float32)
-        )
-
-    # row_count += block.shape[0]
-    # return row_count
 
 
 def dfduT(source, receiver, mesh, fields, block):
@@ -229,9 +203,24 @@ def dfdmT(source, receiver, mesh, fields, block):
     return dfdmT
 
 
-def parallel_block_compute(simulation, Jmatrix, src, A_i, freq, blocks_dfduT, blocks_dfdmT, u_src, sub_threads, count):
+def eval_block(simulation, Ainv_deriv_u, frequency, deriv_m, fields, source):
+    """
+    Evaluate the sensitivities for the block or data and store to zarr
+    """
+    dA_dmT = simulation.getADeriv(frequency, fields, Ainv_deriv_u, adjoint=True)
+    dRHS_dmT = simulation.getRHSDeriv(frequency, source, Ainv_deriv_u, adjoint=True)
+    du_dmT = -dA_dmT
+    if not isinstance(dRHS_dmT, Zero):
+        du_dmT += dRHS_dmT
+    if not isinstance(deriv_m, Zero):
+        du_dmT += deriv_m
+
+    return np.array(du_dmT, dtype=complex).real.T
+
+
+def parallel_block_compute(simulation, A_i, Jmatrix, freq, u_src, src, blocks_deriv_u, blocks_deriv_m, counter, sub_threads, m_size):
     print("Computing derivs blocks")
-    field_derivs = array.hstack(blocks_dfduT).compute()
+    field_derivs = array.hstack(blocks_deriv_u).compute()
 
     # Direct-solver call
     print("Direct solve")
@@ -240,37 +229,51 @@ def parallel_block_compute(simulation, Jmatrix, src, A_i, freq, blocks_dfduT, bl
     # Even split
     print("Splitting")
     split = np.linspace(0, (ATinvdf_duT.shape[1]) / 2, sub_threads)[1:-1].astype(int) * 2
-    sub_blocks_dfduT = np.array_split(ATinvdf_duT, split, axis=1)
+    sub_blocks_deriv_u = np.array_split(ATinvdf_duT, split, axis=1)
 
-    if isinstance(compute(blocks_dfdmT[0])[0], Zero):
-        sub_blocks_dfdmt = [Zero()] * len(sub_blocks_dfduT)
+    if isinstance(compute(blocks_deriv_m[0])[0], Zero):
+        sub_blocks_dfdmt = [Zero()] * len(sub_blocks_deriv_u)
     else:
-        compute_blocks_dfdmT = array.hstack([
+        compute_blocks_deriv_m = array.hstack([
             array.from_delayed(
                 dfdmT_block,
                 dtype=np.float32,
                 shape=(u_src.shape[0], dfdmT_block.shape[1] * 2))
-            for dfdmT_block in blocks_dfdmT
+            for dfdmT_block in blocks_deriv_m
         ]).compute()
-        sub_blocks_dfdmt = np.array_split(compute_blocks_dfdmT, split, axis=1)
+        sub_blocks_dfdmt = np.array_split(compute_blocks_deriv_m, split, axis=1)
 
     sub_process = []
     print("Storing blocks")
-    for sub_block_dfduT, sub_block_dfdmT in zip(sub_blocks_dfduT, sub_blocks_dfdmt):
+    for sub_block_dfduT, sub_block_dfdmT in zip(sub_blocks_deriv_u, sub_blocks_dfdmt):
+        row_size = int(sub_block_dfduT.shape[1] / 2)
         sub_process.append(
-            delayed(eval_store_block, pure=True)(
-                simulation,
-                Jmatrix,
-                sub_block_dfduT,
-                freq,
-                sub_block_dfdmT,
-                u_src,
-                src,
-                count
+            array.from_delayed(
+                delayed(eval_block, pure=True)(
+                    simulation,
+                    sub_block_dfduT,
+                    freq,
+                    sub_block_dfdmT,
+                    u_src,
+                    src
+                ),
+                dtype=np.float32,
+                shape=(row_size, m_size)
             )
         )
-        count += int(sub_block_dfduT.shape[1] / 2)
-    print("Compute Storing blocks")
-    compute(sub_process)
 
-    return count
+    print("Compute Storing blocks")
+    block = array.vstack(sub_process).compute()
+
+    if simulation.store_sensitivities == "disk":
+        Jmatrix.set_orthogonal_selection(
+            (np.arange(counter, counter + block.shape[0]), slice(None)),
+            block.astype(np.float32)
+        )
+    else:
+        Jmatrix[counter: counter + block.shape[0], :] = (
+            block.astype(np.float32)
+        )
+
+    counter += block.shape[0]
+    return counter

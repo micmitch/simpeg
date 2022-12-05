@@ -141,13 +141,10 @@ def compute_J(self, f=None, Ainv=None):
                 float(self.survey.nD) / np.ceil(float(u_src.shape[0]) * self.survey.nD * 8. * 1e-6 / self.max_chunk_size)
             ))
 
-            ct = time()
-
-            print("In loop over receivers")
             for rx in src.receiver_list:
                 v = np.eye(rx.nD, dtype=float)
                 n_blocs = np.ceil(2 * rx.nD / col_chunks * sub_threads)
-                print("In loop over blocks")
+
                 for block in np.array_split(v, n_blocs, axis=1):
 
                     block_count += block.shape[1] * 2
@@ -163,7 +160,7 @@ def compute_J(self, f=None, Ainv=None):
                     )
 
                     if block_count >= (col_chunks * sub_threads):
-                        print(f"{ss}: Block {count}: {time()-ct}")
+
                         count = parallel_block_compute(self, A_i, Jmatrix, freq, u_src, src, blocks_dfduT, blocks_dfdmT, count, sub_threads, m_size)
                         blocks_dfduT = []
                         blocks_dfdmT = []
@@ -219,15 +216,15 @@ def eval_block(simulation, Ainv_deriv_u, frequency, deriv_m, fields, source):
 
 
 def parallel_block_compute(simulation, A_i, Jmatrix, freq, u_src, src, blocks_deriv_u, blocks_deriv_m, counter, sub_threads, m_size):
-    print("Computing derivs blocks")
+
     field_derivs = array.hstack(blocks_deriv_u).compute()
 
     # Direct-solver call
-    print("Direct solve")
+
     ATinvdf_duT = A_i * field_derivs
 
     # Even split
-    print("Splitting")
+
     split = np.linspace(0, (ATinvdf_duT.shape[1]) / 2, sub_threads)[1:-1].astype(int) * 2
     sub_blocks_deriv_u = np.array_split(ATinvdf_duT, split, axis=1)
 
@@ -244,7 +241,7 @@ def parallel_block_compute(simulation, A_i, Jmatrix, freq, u_src, src, blocks_de
         sub_blocks_dfdmt = np.array_split(compute_blocks_deriv_m, split, axis=1)
 
     sub_process = []
-    print("Storing blocks")
+
     for sub_block_dfduT, sub_block_dfdmT in zip(sub_blocks_deriv_u, sub_blocks_dfdmt):
         row_size = int(sub_block_dfduT.shape[1] / 2)
         sub_process.append(
@@ -262,7 +259,7 @@ def parallel_block_compute(simulation, A_i, Jmatrix, freq, u_src, src, blocks_de
             )
         )
 
-    print("Compute Storing blocks")
+
     block = array.vstack(sub_process).compute()
 
     if simulation.store_sensitivities == "disk":

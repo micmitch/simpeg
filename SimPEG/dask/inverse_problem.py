@@ -136,7 +136,7 @@ def get_dpred(self, m, f=None, compute_J=False):
                             vec, compute_J=compute_sensitivities
                         ))[0]
 
-                    if compute_sensitivities and objfct.simulation.verbose:
+                    if compute_sensitivities:
                         runtime = time() - ct
                         total = len(self.dmisfit.objfcts)
 

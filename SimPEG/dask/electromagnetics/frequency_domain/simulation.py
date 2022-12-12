@@ -1,13 +1,11 @@
 from ....electromagnetics.frequency_domain.simulation import BaseFDEMSimulation as Sim
-from ....utils import Zero, mkvc
-from  time import time
+from ....utils import Zero
 import numpy as np
 import scipy.sparse as sp
 import multiprocessing
 from dask import array, compute, delayed
 from dask.distributed import Future
 import zarr
-from time import time
 
 Sim.sensitivity_path = './sensitivity/'
 Sim.gtgdiag = None
@@ -115,7 +113,7 @@ def compute_J(self, f=None, Ainv=None):
     row_chunks = int(np.ceil(
         float(self.survey.nD) / np.ceil(float(m_size) * self.survey.nD * 8. * 1e-6 / self.max_chunk_size)
     ))
-    sub_threads = int(multiprocessing.cpu_count())
+    sub_threads = 1
     if self.store_sensitivities == "disk":
         Jmatrix = zarr.open(
             self.sensitivity_path + f"J.zarr",
@@ -258,7 +256,6 @@ def parallel_block_compute(simulation, A_i, Jmatrix, freq, u_src, src, blocks_de
                 shape=(row_size, m_size)
             )
         )
-
 
     block = array.vstack(sub_process).compute()
 

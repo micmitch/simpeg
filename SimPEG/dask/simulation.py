@@ -1,13 +1,11 @@
 from ..simulation import BaseSimulation as Sim
-from dask.distributed import get_client, Future, Client
+from dask.distributed import get_client, Future
 from dask import array, delayed
-from dask.delayed import Delayed
+import multiprocessing
 import warnings
 from ..data import SyntheticData
 import numpy as np
 from .utils import compute
-from ..utils import mkvc
-from ..data import Data
 
 Sim._max_ram = 16
 
@@ -43,6 +41,24 @@ def max_chunk_size(self, other):
 
 
 Sim.max_chunk_size = max_chunk_size
+
+
+@property
+def n_cpu(self):
+    """Number of cpu's available."""
+    if getattr(self, "_n_cpu", None) is None:
+        self._n_cpu = int(multiprocessing.cpu_count())
+    return self._n_cpu
+
+
+@n_cpu.setter
+def n_cpu(self, other):
+    if other <= 0:
+        raise ValueError("n_cpu must be greater than 0")
+    self._n_cpu = other
+
+
+Sim.n_cpu = n_cpu
 
 
 def make_synthetic_data(

@@ -2,7 +2,7 @@ from ....electromagnetics.frequency_domain.simulation import BaseFDEMSimulation 
 from ....utils import Zero
 import numpy as np
 import scipy.sparse as sp
-import multiprocessing
+
 from dask import array, compute, delayed
 from dask.distributed import Future
 import zarr
@@ -113,7 +113,7 @@ def compute_J(self, f=None, Ainv=None):
     row_chunks = int(np.ceil(
         float(self.survey.nD) / np.ceil(float(m_size) * self.survey.nD * 8. * 1e-6 / self.max_chunk_size)
     ))
-    sub_threads = 1
+
     if self.store_sensitivities == "disk":
         Jmatrix = zarr.open(
             self.sensitivity_path + f"J.zarr",
@@ -141,7 +141,7 @@ def compute_J(self, f=None, Ainv=None):
 
             for rx in src.receiver_list:
                 v = np.eye(rx.nD, dtype=float)
-                n_blocs = np.ceil(2 * rx.nD / col_chunks * sub_threads)
+                n_blocs = np.ceil(2 * rx.nD / col_chunks * self.n_cpu)
 
                 for block in np.array_split(v, n_blocs, axis=1):
 
@@ -157,16 +157,16 @@ def compute_J(self, f=None, Ainv=None):
                             delayed(dfdmT, pure=True)(src, rx, self.mesh, f, block),
                     )
 
-                    if block_count >= (col_chunks * sub_threads):
+                    if block_count >= (col_chunks * self.n_cpu):
 
-                        count = parallel_block_compute(self, A_i, Jmatrix, freq, u_src, src, blocks_dfduT, blocks_dfdmT, count, sub_threads, m_size)
+                        count = parallel_block_compute(self, A_i, Jmatrix, freq, u_src, src, blocks_dfduT, blocks_dfdmT, count, self.n_cpu, m_size)
                         blocks_dfduT = []
                         blocks_dfdmT = []
                         block_count = 0
 
             if blocks_dfduT:
                 count = parallel_block_compute(
-                    self, A_i, Jmatrix, freq, u_src, src, blocks_dfduT, blocks_dfdmT, count, sub_threads, m_size)
+                    self, A_i, Jmatrix, freq, u_src, src, blocks_dfduT, blocks_dfdmT, count, self.n_cpu, m_size)
                 block_count = 0
 
     for A in Ainv:

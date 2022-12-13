@@ -9,7 +9,7 @@ import dask.array as da
 import gc
 from ..regularization import BaseComboRegularization, Sparse
 from ..data_misfit import BaseDataMisfit
-from ..objective_function import BaseObjectiveFunction
+from ..objective_function import BaseObjectiveFunction, ComboObjectiveFunction
 
 
 def dask_getFields(self, m, store=False, deleteWarmstart=True):
@@ -136,7 +136,7 @@ def get_dpred(self, m, f=None, compute_J=False):
                             vec, compute_J=compute_sensitivities
                         ))[0]
 
-                    if compute_sensitivities and objfct.simulation.verbose:
+                    if compute_sensitivities:
                         runtime = time() - ct
                         total = len(self.dmisfit.objfcts)
 
@@ -190,7 +190,19 @@ def dask_evalFunction(self, m, return_g=True, return_H=True):
 
     phi_d = np.asarray(phi_d)
     # print(self.dpred[0])
-    self.reg2Deriv = [obj.deriv2(m) for obj in self.reg.objfcts]
+
+
+    if isinstance(self.reg, ComboObjectiveFunction) and not isinstance(
+            self.reg, BaseComboRegularization
+    ):
+        reg2Deriv = []
+        for fct in self.reg.objfcts:
+            reg2Deriv += [multi * obj.deriv2(m) for multi, obj in fct]
+    else:
+        reg2Deriv = [multi * obj.deriv2(m) for multi, obj in self.reg]
+
+    self.reg2Deriv = np.sum(reg2Deriv)
+
     # reg = np.linalg.norm(self.reg2Deriv * self.reg._delta_m(m))
     phi_m = self.reg(m)
 
@@ -244,7 +256,7 @@ def dask_evalFunction(self, m, return_g=True, return_H=True):
 
         def H_fun(v):
             phi_d2Deriv = self.dmisfit.deriv2(m, v)
-            phi_m2Deriv = np.sum([reg2Deriv * v for reg2Deriv in self.reg2Deriv], axis=0)
+            phi_m2Deriv = self.reg2Deriv * v
 
             H = phi_d2Deriv + self.beta * phi_m2Deriv
 

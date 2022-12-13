@@ -219,14 +219,13 @@ def dask_dpred(self, m=None, f=None, compute_J=False):
     rows = []
     for src in self.survey.source_list:
         for rx in src.receiver_list:
-            # rows.append(array.from_delayed(
-            #     row(src, rx, self.mesh, f),
-            #     dtype=np.float32,
-            #     shape=(rx.nD,),
-            # ))
-            rows.append(rx.eval(src, self.mesh, f))
+            rows.append(array.from_delayed(
+                row(src, rx, self.mesh, f),
+                dtype=np.float32,
+                shape=(rx.nD,),
+            ))
 
-    data = np.r_[rows].flatten()
+    data = array.hstack(rows).compute()
 
     if compute_J and self._Jmatrix is None:
         Jmatrix = self.compute_J(f=f, Ainv=Ainv)

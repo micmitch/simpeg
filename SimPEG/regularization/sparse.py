@@ -313,45 +313,43 @@ class SparseDeriv(BaseSparse):
         else:
             f_m = self.model
 
-        if self.space == "spherical":
+        if self.gradientType == "total":
 
-            cell_diff = getattr(
-                self.regmesh, "cellDiff{}Stencil".format(self.orientation)
-            )
-            theta = cell_diff * (self.mapping * f_m)
-            dmdx = self.length_scales * utils.mat_utils.coterminal(theta)
+            dmdx = self.regmesh.cellDiffxStencil * (self.mapping * f_m)
+
+            if self.space == "spherical":
+                dmdx = utils.mat_utils.coterminal(dmdx)
+
+            dmdx = (self.regmesh.aveFx2CC * dmdx) ** 2.0
+
+            if self.regmesh.dim > 1:
+
+                dmdy = self.regmesh.cellDiffyStencil * (self.mapping * f_m)
+
+                if self.space == "spherical":
+                    dmdy = utils.mat_utils.coterminal(dmdy)
+
+                dmdy = (self.regmesh.aveFy2CC * dmdy) ** 2.0
+                dmdx += dmdy
+
+            if self.regmesh.dim > 2:
+                dmdz = self.regmesh.cellDiffzStencil * (self.mapping * f_m)
+
+                if self.space == "spherical":
+                    dmdz = utils.mat_utils.coterminal(dmdz)
+
+                dmdz = (self.regmesh.aveFz2CC * dmdz) ** 2.0
+                dmdx += dmdz
+
+            Ave = getattr(self.regmesh, "aveCC2F{}".format(self.orientation))
+            dmdx = (Ave * dmdx) ** 0.5
 
         else:
+            dmdx = self.cellDiffStencil * (self.mapping * f_m)
+            if self.space == "spherical":
+                dmdx = utils.mat_utils.coterminal(dmdx)
 
-            if self.gradientType == "total":
-                Ave = getattr(self.regmesh, "aveCC2F{}".format(self.orientation))
-
-                dmdx = np.abs(
-                    self.regmesh.aveFx2CC
-                    * self.regmesh.cellDiffxStencil
-                    * (self.mapping * f_m)
-                )
-
-                if self.regmesh.dim > 1:
-
-                    dmdx += np.abs(
-                        self.regmesh.aveFy2CC
-                        * self.regmesh.cellDiffyStencil
-                        * (self.mapping * f_m)
-                    )
-
-                if self.regmesh.dim > 2:
-
-                    dmdx += np.abs(
-                        self.regmesh.aveFz2CC
-                        * self.regmesh.cellDiffzStencil
-                        * (self.mapping * f_m)
-                    )
-
-                dmdx = Ave * dmdx
-
-            else:
-                dmdx = self.cellDiffStencil * (self.mapping * f_m)
+        dmdx *= self.length_scales
 
         return dmdx
 

@@ -186,7 +186,6 @@ def Jmatrix(self):
 Sim.Jmatrix = Jmatrix
 
 
-@delayed
 def dask_dpred(self, m=None, f=None, compute_J=False):
     """
     dpred(m, f=None)
@@ -213,7 +212,7 @@ def dask_dpred(self, m=None, f=None, compute_J=False):
         f, Ainv = self.fields(m, return_Ainv=compute_J)
 
     def evaluate_receiver(source, receiver, mesh, fields):
-        return receiver.eval(source, mesh, fields)
+        return receiver.eval(source, mesh, fields).flatten()
 
     row = delayed(evaluate_receiver, pure=True)
     rows = []

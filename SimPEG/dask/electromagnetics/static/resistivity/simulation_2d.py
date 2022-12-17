@@ -129,8 +129,6 @@ def compute_J(self, f=None, Ainv=None):
 Sim.compute_J = compute_J
 
 
-# This could technically be handled by dask.simulation, but doesn't seem to register
-@dask.delayed
 def dask_dpred(self, m=None, f=None, compute_J=False):
     """
     dpred(m, f=None)

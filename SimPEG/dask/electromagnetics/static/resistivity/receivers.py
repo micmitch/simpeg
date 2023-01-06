@@ -43,4 +43,4 @@ def dask_Pole_getP(self, mesh, Gloc):
     return P
 
 
-Pole.getP = dask_Dipole_getP
+Pole.getP = dask_Pole_getP

@@ -1,13 +1,11 @@
 from ..simulation import BaseSimulation as Sim
-from dask.distributed import get_client, Future, Client
+from dask.distributed import get_client, Future
 from dask import array, delayed
-from dask.delayed import Delayed
+import multiprocessing
 import warnings
 from ..data import SyntheticData
 import numpy as np
 from .utils import compute
-from ..utils import mkvc
-from ..data import Data
 
 Sim._max_ram = 16
 
@@ -43,6 +41,24 @@ def max_chunk_size(self, other):
 
 
 Sim.max_chunk_size = max_chunk_size
+
+
+@property
+def n_cpu(self):
+    """Number of cpu's available."""
+    if getattr(self, "_n_cpu", None) is None:
+        self._n_cpu = int(multiprocessing.cpu_count())
+    return self._n_cpu
+
+
+@n_cpu.setter
+def n_cpu(self, other):
+    if other <= 0:
+        raise ValueError("n_cpu must be greater than 0")
+    self._n_cpu = other
+
+
+Sim.n_cpu = n_cpu
 
 
 def make_synthetic_data(
@@ -170,7 +186,6 @@ def Jmatrix(self):
 Sim.Jmatrix = Jmatrix
 
 
-@delayed
 def dask_dpred(self, m=None, f=None, compute_J=False):
     """
     dpred(m, f=None)
@@ -196,16 +211,26 @@ def dask_dpred(self, m=None, f=None, compute_J=False):
             m = self.model
         f, Ainv = self.fields(m, return_Ainv=compute_J)
 
-    data = Data(self.survey)
+    def evaluate_receiver(source, receiver, mesh, fields):
+        return receiver.eval(source, mesh, fields).flatten()
+
+    row = delayed(evaluate_receiver, pure=True)
+    rows = []
     for src in self.survey.source_list:
         for rx in src.receiver_list:
-            data[src, rx] = rx.eval(src, self.mesh, f)
+            rows.append(array.from_delayed(
+                row(src, rx, self.mesh, f),
+                dtype=np.float32,
+                shape=(rx.nD,),
+            ))
 
-    if compute_J:
+    data = array.hstack(rows).compute()
+
+    if compute_J and self._Jmatrix is None:
         Jmatrix = self.compute_J(f=f, Ainv=Ainv)
-        return (mkvc(data), Jmatrix)
+        return data, Jmatrix
 
-    return mkvc(data)
+    return data
 
 
 Sim.dpred = dask_dpred

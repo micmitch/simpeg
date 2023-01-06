@@ -1,11 +1,11 @@
 from ....electromagnetics.frequency_domain.simulation import BaseFDEMSimulation as Sim
-from ....utils import Zero, mkvc
+from ....utils import Zero
 import numpy as np
 import scipy.sparse as sp
-import dask.array as da
+
+from dask import array, compute, delayed
 from dask.distributed import Future
 import zarr
-from time import time
 
 Sim.sensitivity_path = './sensitivity/'
 Sim.gtgdiag = None
@@ -22,16 +22,16 @@ def fields(self, m=None, return_Ainv=False):
     for freq in self.survey.frequencies:
         A = self.getA(freq)
         rhs = self.getRHS(freq)
-
-        if return_Ainv:
-            Ainv += [self.solver(sp.csr_matrix(A.T), **self.solver_opts)]
-
         Ainv_solve = self.solver(sp.csr_matrix(A), **self.solver_opts)
         u = Ainv_solve * rhs
         Srcs = self.survey.get_sources_by_frequency(freq)
         f[Srcs, self._solutionType] = u
 
         Ainv_solve.clean()
+
+        if return_Ainv:
+            Ainv += [self.solver(sp.csr_matrix(A.T), **self.solver_opts)]
+
 
     if return_Ainv:
         return f, Ainv
@@ -56,9 +56,9 @@ def dask_getJtJdiag(self, m, W=None):
         else:
             W = W.diagonal()
 
-        diag = da.einsum('i,ij,ij->j', W, self.Jmatrix, self.Jmatrix)
+        diag = array.einsum('i,ij,ij->j', W, self.Jmatrix, self.Jmatrix)
 
-        if isinstance(diag, da.Array):
+        if isinstance(diag, array.Array):
             diag = np.asarray(diag.compute())
 
         self.gtgdiag = diag
@@ -80,7 +80,7 @@ def dask_Jvec(self, m, v):
     if isinstance(self.Jmatrix, Future):
         self.Jmatrix  # Wait to finish
 
-    return da.dot(self.Jmatrix, v)
+    return array.dot(self.Jmatrix, v)
 
 
 Sim.Jvec = dask_Jvec
@@ -98,7 +98,7 @@ def dask_Jtvec(self, m, v):
     if isinstance(self.Jmatrix, Future):
         self.Jmatrix  # Wait to finish
 
-    return da.dot(v, self.Jmatrix)
+    return array.dot(v, self.Jmatrix)
 
 
 Sim.Jtvec = dask_Jtvec
@@ -113,6 +113,7 @@ def compute_J(self, f=None, Ainv=None):
     row_chunks = int(np.ceil(
         float(self.survey.nD) / np.ceil(float(m_size) * self.survey.nD * 8. * 1e-6 / self.max_chunk_size)
     ))
+
     if self.store_sensitivities == "disk":
         Jmatrix = zarr.open(
             self.sensitivity_path + f"J.zarr",
@@ -123,87 +124,150 @@ def compute_J(self, f=None, Ainv=None):
     else:
         Jmatrix = np.zeros((self.survey.nD, m_size), dtype=np.float32)
 
-    def eval_store_block(A, freq, df_duT, df_dmT, u_src, src, row_count):
-        """
-        Evaluate the sensitivities for the block or data and store to zarr
-        """
-        df_duT = np.hstack(df_duT)
-        ATinvdf_duT = (A * df_duT).reshape((dfduT.shape[0], -1))
-        dA_dmT = self.getADeriv(freq, u_src, ATinvdf_duT, adjoint=True)
-        dRHS_dmT = self.getRHSDeriv(freq, src, ATinvdf_duT, adjoint=True)
-        du_dmT = -dA_dmT
-        if not isinstance(dRHS_dmT, Zero):
-            du_dmT += dRHS_dmT
-        if not isinstance(df_dmT[0], Zero):
-            du_dmT += np.hstack(df_dmT)
-
-        block = np.array(du_dmT, dtype=complex).real.T
-
-        if self.store_sensitivities == "disk":
-            Jmatrix.set_orthogonal_selection(
-                (np.arange(row_count, row_count + block.shape[0]), slice(None)),
-                block.astype(np.float32)
-            )
-        else:
-            Jmatrix[row_count: row_count + block.shape[0], :] = (
-                block.astype(np.float32)
-            )
-
-        row_count += block.shape[0]
-        return row_count
-
-    blocks = []
     count = 0
     block_count = 0
+
     for A_i, freq in zip(Ainv, self.survey.frequencies):
 
-        for src in self.survey.get_sources_by_frequency(freq):
+        for ss, src in enumerate(self.survey.get_sources_by_frequency(freq)):
             df_duT, df_dmT = [], []
+            blocks_dfduT = []
+            blocks_dfdmT = []
             u_src = f[src, self._solutionType]
+
+            col_chunks = int(np.ceil(
+                float(self.survey.nD) / np.ceil(float(u_src.shape[0]) * self.survey.nD * 8. * 1e-6 / self.max_chunk_size)
+            ))
 
             for rx in src.receiver_list:
                 v = np.eye(rx.nD, dtype=float)
-                n_blocs = np.ceil(2 * rx.nD / row_chunks)
+                n_blocs = np.ceil(2 * rx.nD / col_chunks * self.n_cpu)
 
                 for block in np.array_split(v, n_blocs, axis=1):
 
-                    dfduT, dfdmT = rx.evalDeriv(
-                        src, self.mesh, f, v=block, adjoint=True
+                    block_count += block.shape[1] * 2
+                    blocks_dfduT.append(
+                        array.from_delayed(
+                            delayed(dfduT, pure=True)(src, rx, self.mesh, f, block),
+                            dtype=np.float32,
+                            shape=(u_src.shape[0], block.shape[1]*2)
+                        )
                     )
-                    df_duT += [dfduT]
-                    df_dmT += [dfdmT]
+                    blocks_dfdmT.append(
+                            delayed(dfdmT, pure=True)(src, rx, self.mesh, f, block),
+                    )
 
-                    block_count += dfduT.shape[1]
+                    if block_count >= (col_chunks * self.n_cpu):
 
-                    if block_count >= row_chunks:
-                        count = eval_store_block(A_i, freq, df_duT, df_dmT, u_src, src, count)
-                        df_duT, df_dmT = [], []
+                        count = parallel_block_compute(self, A_i, Jmatrix, freq, u_src, src, blocks_dfduT, blocks_dfdmT, count, self.n_cpu, m_size)
+                        blocks_dfduT = []
+                        blocks_dfdmT = []
                         block_count = 0
-                        # blocks, count = store_block(blocks, count)
 
-            if df_duT:
-                count = eval_store_block(A_i, freq, df_duT, df_dmT, u_src, src, count)
+            if blocks_dfduT:
+                count = parallel_block_compute(
+                    self, A_i, Jmatrix, freq, u_src, src, blocks_dfduT, blocks_dfdmT, count, self.n_cpu, m_size)
                 block_count = 0
-
-    if len(blocks) != 0:
-        if self.store_sensitivities == "disk":
-            Jmatrix.set_orthogonal_selection(
-                (np.arange(count, self.survey.nD), slice(None)),
-                blocks.astype(np.float32)
-            )
-        else:
-            Jmatrix[count: self.survey.nD, :] = (
-                blocks.astype(np.float32)
-            )
 
     for A in Ainv:
         A.clean()
 
     if self.store_sensitivities == "disk":
         del Jmatrix
-        return da.from_zarr(self.sensitivity_path + f"J.zarr")
+        return array.from_zarr(self.sensitivity_path + f"J.zarr")
     else:
         return Jmatrix
 
 
 Sim.compute_J = compute_J
+
+
+def dfduT(source, receiver, mesh, fields, block):
+    dfduT, _ = receiver.evalDeriv(
+        source, mesh, fields, v=block, adjoint=True
+    )
+
+    return dfduT
+
+
+def dfdmT(source, receiver, mesh, fields, block):
+    _, dfdmT = receiver.evalDeriv(
+        source, mesh, fields, v=block, adjoint=True
+    )
+
+    return dfdmT
+
+
+def eval_block(simulation, Ainv_deriv_u, frequency, deriv_m, fields, source):
+    """
+    Evaluate the sensitivities for the block or data and store to zarr
+    """
+    dA_dmT = simulation.getADeriv(frequency, fields, Ainv_deriv_u, adjoint=True)
+    dRHS_dmT = simulation.getRHSDeriv(frequency, source, Ainv_deriv_u, adjoint=True)
+    du_dmT = -dA_dmT
+    if not isinstance(dRHS_dmT, Zero):
+        du_dmT += dRHS_dmT
+    if not isinstance(deriv_m, Zero):
+        du_dmT += deriv_m
+
+    return np.array(du_dmT, dtype=complex).real.T
+
+
+def parallel_block_compute(simulation, A_i, Jmatrix, freq, u_src, src, blocks_deriv_u, blocks_deriv_m, counter, sub_threads, m_size):
+
+    field_derivs = array.hstack(blocks_deriv_u).compute()
+
+    # Direct-solver call
+
+    ATinvdf_duT = A_i * field_derivs
+
+    # Even split
+
+    split = np.linspace(0, (ATinvdf_duT.shape[1]) / 2, sub_threads)[1:-1].astype(int) * 2
+    sub_blocks_deriv_u = np.array_split(ATinvdf_duT, split, axis=1)
+
+    if isinstance(compute(blocks_deriv_m[0])[0], Zero):
+        sub_blocks_dfdmt = [Zero()] * len(sub_blocks_deriv_u)
+    else:
+        compute_blocks_deriv_m = array.hstack([
+            array.from_delayed(
+                dfdmT_block,
+                dtype=np.float32,
+                shape=(u_src.shape[0], dfdmT_block.shape[1] * 2))
+            for dfdmT_block in blocks_deriv_m
+        ]).compute()
+        sub_blocks_dfdmt = np.array_split(compute_blocks_deriv_m, split, axis=1)
+
+    sub_process = []
+
+    for sub_block_dfduT, sub_block_dfdmT in zip(sub_blocks_deriv_u, sub_blocks_dfdmt):
+        row_size = int(sub_block_dfduT.shape[1] / 2)
+        sub_process.append(
+            array.from_delayed(
+                delayed(eval_block, pure=True)(
+                    simulation,
+                    sub_block_dfduT,
+                    freq,
+                    sub_block_dfdmT,
+                    u_src,
+                    src
+                ),
+                dtype=np.float32,
+                shape=(row_size, m_size)
+            )
+        )
+
+    block = array.vstack(sub_process).compute()
+
+    if simulation.store_sensitivities == "disk":
+        Jmatrix.set_orthogonal_selection(
+            (np.arange(counter, counter + block.shape[0]), slice(None)),
+            block.astype(np.float32)
+        )
+    else:
+        Jmatrix[counter: counter + block.shape[0], :] = (
+            block.astype(np.float32)
+        )
+
+    counter += block.shape[0]
+    return counter

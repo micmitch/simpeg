@@ -126,15 +126,10 @@ def get_dpred(self, m, f=None, compute_J=False):
                 else:
                     # For locals, the future is now
                     ct = time()
-                    if objfct.simulation.verbose and (compute_sensitivities or objfct.simulation.store_sensitivities == "forward_only"):
-                        with ProgressBar():
-                            future = da.compute(objfct.simulation.dpred(
-                                vec, compute_J=compute_sensitivities
-                            ))[0]
-                    else:
-                        future = da.compute(objfct.simulation.dpred(
-                            vec, compute_J=compute_sensitivities
-                        ))[0]
+
+                    future = objfct.simulation.dpred(
+                        vec, compute_J=compute_sensitivities
+                    )
 
                     if compute_sensitivities:
                         runtime = time() - ct

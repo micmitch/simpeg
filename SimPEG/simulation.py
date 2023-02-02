@@ -120,9 +120,9 @@ class BaseSimulation(props.HasModel):
     ###########################################################################
     # Properties
 
-    _REGISTRY = {}
+    # _REGISTRY = {}
 
-    mesh = properties.Instance("a discretize mesh instance", BaseMesh)
+    _mesh = None
 
     survey = properties.Instance("a survey object", BaseSurvey)
 
@@ -175,14 +175,23 @@ class BaseSimulation(props.HasModel):
     ###########################################################################
     # Properties and observers
 
-    @properties.observer("mesh")
-    def _update_registry(self, change):
-        self._REGISTRY.update(change["value"]._REGISTRY)
+    # @properties.observer("mesh")
+    # def _update_registry(self, change):
+    #     self._REGISTRY.update(change["value"]._REGISTRY)
 
     #: List of strings, e.g. ['_MeSigma', '_MeSigmaI']
     # TODO: rename to _delete_on_model_update
     deleteTheseOnModelUpdate = []
+    @property
+    def mesh(self):
+        return self._mesh
 
+    @mesh.setter
+    def mesh(self, entity):
+        if not isinstance(entity, BaseMesh):
+            raise TypeError("mesh must be a discretize.BaseMesh")
+        self._mesh = entity
+        self._reset()
     #: List of matrix names to have their factors cleared on a model update
     clean_on_model_update = []
 
@@ -237,7 +246,7 @@ class BaseSimulation(props.HasModel):
             )
 
         if mesh is not None:
-            kwargs["mesh"] = mesh
+            kwargs = {"mesh": mesh, **kwargs}
 
         super(BaseSimulation, self).__init__(**kwargs)
 

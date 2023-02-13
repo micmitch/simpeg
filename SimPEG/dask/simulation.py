@@ -61,6 +61,68 @@ def n_cpu(self, other):
 Sim.n_cpu = n_cpu
 
 
+def dask_getJtJdiag(self, m, W=None):
+    """
+        Return the diagonal of JtJ
+    """
+    self.model = m
+    if self.gtgdiag is None:
+        if isinstance(self.Jmatrix, Future):
+            self.Jmatrix  # Wait to finish
+
+        if W is None:
+            W = np.ones(self.nD)
+        else:
+            W = W.diagonal()
+
+        diag = array.einsum('i,ij,ij->j', W, self.Jmatrix, self.Jmatrix)
+
+        if isinstance(diag, array.Array):
+            diag = np.asarray(diag.compute())
+
+        self.gtgdiag = diag
+    return self.gtgdiag
+
+
+Sim.getJtJdiag = dask_getJtJdiag
+
+
+def dask_Jvec(self, m, v):
+    """
+        Compute sensitivity matrix (J) and vector (v) product.
+    """
+    self.model = m
+
+    if isinstance(self.Jmatrix, np.ndarray):
+        return self.Jmatrix @ v.astype(np.float32)
+
+    if isinstance(self.Jmatrix, Future):
+        self.Jmatrix  # Wait to finish
+
+    return array.dot(self.Jmatrix, v)
+
+
+Sim.Jvec = dask_Jvec
+
+
+def dask_Jtvec(self, m, v):
+    """
+        Compute adjoint sensitivity matrix (J^T) and vector (v) product.
+    """
+    self.model = m
+
+    if isinstance(self.Jmatrix, np.ndarray):
+        return self.Jmatrix.T @ v.astype(np.float32)
+
+    if isinstance(self.Jmatrix, Future):
+        self.Jmatrix  # Wait to finish
+
+    return array.dot(v, self.Jmatrix)
+
+
+Sim.Jtvec = dask_Jtvec
+
+
 def make_synthetic_data(
         self, m, relative_error=0.05, noise_floor=0.0, f=None, add_noise=False, **kwargs
 ):
@@ -123,34 +185,6 @@ def workers(self, workers):
 
 
 Sim.workers = workers
-
-
-def dask_Jvec(self, m, v):
-    """
-        Compute sensitivity matrix (J) and vector (v) product.
-    """
-    self.model = m
-    if isinstance(self.Jmatrix, Future):
-        self.Jmatrix  # Wait to finish
-
-    return array.dot(self.Jmatrix, v)
-
-
-Sim.Jvec = dask_Jvec
-
-
-def dask_Jtvec(self, m, v):
-    """
-        Compute adjoint sensitivity matrix (J^T) and vector (v) product.
-    """
-    self.model = m
-    if isinstance(self.Jmatrix, Future):
-        self.Jmatrix  # Wait to finish
-
-    return array.dot(v, self.Jmatrix)
-
-
-Sim.Jtvec = dask_Jtvec
 
 
 @property

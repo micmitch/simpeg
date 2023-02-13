@@ -2117,6 +2117,7 @@ class UpdateSensitivityWeights(InversionDirective):
     everyIter = True
     threshold: int = 0
     switch = True
+    method = "percent_amplitude"
 
     def initialize(self):
 
@@ -2173,10 +2174,15 @@ class UpdateSensitivityWeights(InversionDirective):
                 wr += prob_JtJ
 
             wr /= wr.max()
-            wr = wr ** 0.5
 
-            wr += np.percentile(wr, self.threshold)#threshold
+            if self.method == "percent_amplitude":
+                wr += np.abs(wr.max() - wr.min()) * self.threshold / 100.
+            elif self.method == "percentile":
+                np.percentile(wr, self.threshold) #threshold
+            else:
+                wr += self.threshold
 
+            wr **= 0.5
 
         else:
             wr += 1.0

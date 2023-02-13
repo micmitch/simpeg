@@ -258,7 +258,7 @@ model = background_conductivity * np.ones(nC)
 #     & (mesh.gridCC[ind_active, 2] < -150.0)
 # )
 
-face =  np.r_[
+face = np.r_[
     np.c_[-50, -100, -50],
     np.c_[-50, 100, -50],
     np.c_[50, 100, -50],
@@ -370,7 +370,10 @@ opt = optimization.ProjectedGNCG(
 
 inv_prob = inverse_problem.BaseInvProblem(dmis, reg, opt)
 directive_list = [
-    directives.UpdateSensitivityWeights(threshold=5),
+    directives.UpdateSensitivityWeights(
+        method="percent_amplitude",
+        threshold=5
+    ),
     directives.SaveIterationsGeoH5(octree, transforms=[plotting_map], sorting=mesh._ubc_order),
     directives.SaveIterationsGeoH5(
         tem_survey,

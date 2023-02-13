@@ -408,10 +408,10 @@ class BaseEMSimulation(BaseSimulation):
         M = self._MeSigmaDeriv
         if v is not None:
             if u.ndim > 1:
-                if u.shape[1] > 1:
+                if u.shape[1] > 1 and not isinstance(u, (sp.csr_matrix, sp.csc_matrix, sp.coo_matrix)):
                     # u has multiple fields
                     if v.ndim == 1:
-                        v = v[:, None]
+                        v = sp.diags(v)
                 else:
                     u = u[:, 0]
             if u.ndim == 1:
@@ -419,11 +419,11 @@ class BaseEMSimulation(BaseSimulation):
                     if v.shape[1] == 1:
                         v = v[:, 0]
                     else:
-                        u = u[:, None]
+                        u = sp.diags(u)
             if v.ndim > 2:
                 u = u[:, :, None]
             if adjoint:
-                if u.ndim > 1 and u.shape[1] > 1:
+                if u.ndim > 1 and u.shape[1] > 1 and not isinstance(u, sp.dia_matrix):
 
                     return M.T * (
                             u[:, None, :] *

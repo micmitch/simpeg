@@ -1386,7 +1386,7 @@ class SaveIterationsGeoH5(InversionDirective):
         if values is not None:
             prop = self.stack_channels(values)
         elif self.attribute_type == "predicted":
-            dpred = self.invProb.dpred
+            dpred = getattr(self.invProb, "dpred", None)
             if dpred is None:
                 dpred = self.invProb.get_dpred(self.invProb.model)
                 self.invProb.dpred = dpred

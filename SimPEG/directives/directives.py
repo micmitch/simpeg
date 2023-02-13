@@ -1367,17 +1367,9 @@ class SaveIterationsGeoH5(InversionDirective):
         Regroup channel values along rows.
         """
         if isinstance(dpred, np.ndarray):
-            return dpred.reshape((1, -1))
+            return self.reshape(dpred)
 
-        tile_stack = []
-        channels = []
-        for pred in dpred:
-            channels += [pred]
-            if len(channels) == len(self.channels):
-                tile_stack += [self.reshape(np.vstack(channels))]
-                channels = []
-
-        return np.dstack(tile_stack)
+        return self.reshape(np.hstack(dpred))
 
     def save_components(self, iteration: int, values: list[np.ndarray] = None):
         """

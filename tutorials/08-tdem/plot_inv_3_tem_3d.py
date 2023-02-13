@@ -340,7 +340,7 @@ noise = np.random.randn(dpred.shape[0]) * ( #1e-15)
 data_object = data.Data(
     survey,
     dobs=dpred + noise,
-    noise_floor=floors.flatten(),
+    noise_floor=floors.flatten(order='F'),
     # noise_floor=np.kron(
     #     np.mean(np.abs(dpred).reshape), axis=1),
     #     np.ones(n_times),
@@ -453,7 +453,7 @@ plt.plot(reshape(data_object.dobs).squeeze().T, "b")
 plt.plot(reshape(np.r_[inv_prob.dpred]).squeeze().T, "r")
 plt.plot(reshape(data_object.standard_deviation).squeeze().T, "k--")
 plt.plot(reshape(-data_object.standard_deviation).squeeze().T, "k--")
-axs.set_yscale("symlog", linthresh=1e-11)
+axs.set_yscale("symlog", linthresh=1e-13)
 axs.set_title("LP Predicted")
 axs.set_ylim([-1e-10, 0])
 
@@ -464,7 +464,7 @@ if hasattr(inv_prob, "l2model"):
     plt.plot(reshape(simulation.dpred(inv_prob.l2model)).squeeze().T, "r")
     plt.plot(reshape(data_object.standard_deviation).squeeze().T, "k--")
     plt.plot(reshape(-data_object.standard_deviation).squeeze().T, "k--")
-    axs.set_yscale("symlog", linthresh=1e-11)
+    axs.set_yscale("symlog", linthresh=1e-14)
     axs.set_title("L2 Predicted")
     axs.set_ylim([-1e-10, 0])
     plt.show()

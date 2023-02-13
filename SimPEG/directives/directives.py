@@ -2117,7 +2117,7 @@ class UpdateSensitivityWeights(InversionDirective):
     everyIter = True
     threshold: int = 0
     switch = True
-    method = "percent_amplitude"
+    method = "percentile"
 
     def initialize(self):
 

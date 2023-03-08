@@ -1424,7 +1424,7 @@ class SaveIterationsGeoH5(InversionDirective):
 
                     channel_name = base_name
                     if len(channel) > 0:
-                        channel_name += f"_{channel}"
+                        channel_name += f"_[{ii}]"
 
                     if self.label is not None:
                         channel_name += f"_{self.label}"

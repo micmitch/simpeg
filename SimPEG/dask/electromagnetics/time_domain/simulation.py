@@ -161,7 +161,9 @@ def compute_J(self, f=None, Ainv=None):
     # ATinv_df_duT_v = {}
     f = dask.delayed(f)
     field_derivs_t = {}
+
     for tInd, dt in tqdm(zip(reversed(range(self.nT)), reversed(self.time_steps))):
+
         AdiagTinv = Ainv[dt]
         Asubdiag = self.getAsubdiag(tInd)
         d_count = 0

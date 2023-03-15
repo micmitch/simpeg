@@ -73,7 +73,7 @@ def dask_getJtJdiag(self, m, W=None):
         if W is None:
             W = np.ones(self.nD)
         else:
-            W = W.diagonal()
+            W = W.diagonal()**2.
 
         diag = array.einsum('i,ij,ij->j', W, self.Jmatrix, self.Jmatrix)
 

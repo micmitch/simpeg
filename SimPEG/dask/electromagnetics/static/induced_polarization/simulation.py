@@ -110,7 +110,7 @@ def dask_getJtJdiag(self, m, W=None):
         if W is None:
             W = self._scale * np.ones(self.nD)
         else:
-            W = self._scale * W.diagonal()
+            W = (self._scale * W.diagonal())**2.0
 
         diag = da.einsum('i,ij,ij->j', W, self.Jmatrix, self.Jmatrix)
 

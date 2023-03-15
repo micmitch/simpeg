@@ -75,7 +75,7 @@ def dask_getJtJdiag(self, m, W=None):
         self.Jmatrix  # Wait to finish
     if getattr(self, "_gtg_diagonal", None) is None:
         if not self.is_amplitude_data:
-            diag = array.einsum('i,ij,ij->j', W, self.G, self.G)
+            diag = array.einsum('i,ij,ij->j', W**2., self.G, self.G)
         else:  # self.modelType is amplitude
             fieldDeriv = self.fieldDeriv
             J = (

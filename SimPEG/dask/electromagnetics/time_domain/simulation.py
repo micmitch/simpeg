@@ -125,9 +125,16 @@ def compute_J(self, f=None, Ainv=None):
             mode='w',
             shape=(self.survey.nD, m_size),
             chunks=(row_chunks, m_size)
-        )# + J_initializer
+        )
+        partial_derivs = zarr.open(
+            self.sensitivity_path + f"partials.zarr",
+            mode='w',
+            shape=(self.getAsubdiag(0).shape[0], self.survey.nD),
+            chunks=(self.getAsubdiag(0).shape[0], row_chunks)
+        )
     else:
         Jmatrix = np.zeros((self.survey.nD, m_size), dtype=np.float32)
+        partial_derivs = np.zeros((self.getAsubdiag(0).shape[0], self.survey.nD), dtype=np.float32)
 
     if self.field_derivs is None:
         block_size = len(f[self.survey.source_list[0], solution_type, 0])
@@ -145,7 +152,7 @@ def compute_J(self, f=None, Ainv=None):
         self.field_derivs = dask.compute(field_derivs)[0]
 
     f = dask.delayed(f)
-    field_derivs_t = {}
+    field_derivatives = {}
 
     for tInd, dt in tqdm(zip(reversed(range(self.nT)), reversed(self.time_steps))):
 
@@ -153,59 +160,71 @@ def compute_J(self, f=None, Ainv=None):
         Asubdiag = self.getAsubdiag(tInd)
         d_count = 0
         field_deriv_blocks = []
-        row_blocks = []
+        j_row_blocks = []
 
         for isrc, src in enumerate(self.survey.source_list):
-            source_blocks = []
+            field_blocks = []
             n_data = self.field_derivs[tInd+1][isrc][0].shape[1]
             n_blocks = int(np.ceil((m_size * n_data) * 8. * 1e-6 / 128.))
             sub_blocks = np.array_split(np.arange(n_data), n_blocks)
 
             for block_ind in sub_blocks:
-                if isrc not in field_derivs_t:
+                if isrc not in field_derivatives:
                     ATinv_df_duT_v = (
                         AdiagTinv * self.field_derivs[tInd + 1][isrc][0][:, block_ind].toarray()
                     )
                 else:
-                    ATinv_df_duT_v = AdiagTinv * np.asarray(field_derivs_t[isrc][:, block_ind])
+                    ATinv_df_duT_v = AdiagTinv * np.asarray(field_derivatives[isrc][:, block_ind])
 
-                delayed_J_block = delayed(parallel_block_compute, pure=True)(
-                    self, f, src, ATinv_df_duT_v,
-                    tInd, solution_type, d_count, Jmatrix, self.field_derivs[tInd+1][isrc][1][block_ind, :]
-                )
+                if self.store_sensitivities == "disk":
+                    partial_derivs.set_orthogonal_selection(
+                        (slice(None), slice(d_count, d_count + len(block_ind))),
+                        ATinv_df_duT_v
+                    )
+                else:
+                    partial_derivs[:, d_count: d_count + len(block_ind)] = ATinv_df_duT_v
 
-                delayed_field_block = delayed(parallel_field_deriv, pure=True)(
-                    ATinv_df_duT_v, Asubdiag, self.field_derivs[tInd][isrc][0][:, block_ind]
-                )
-
-                source_blocks.append(
+                field_blocks.append(
                     dask.array.from_delayed(
-                        delayed_field_block,
+                        delayed(parallel_field_deriv, pure=True)(
+                            partial_derivs[:, d_count: d_count + len(block_ind)], Asubdiag,
+                            self.field_derivs[tInd][isrc][0][:, block_ind]
+                        ),
                         shape=(Asubdiag.shape[0], len(block_ind)),
-                        dtype=np.float32
+                        dtype=np.float64
                     )
                 )
-
-                row_blocks.append(dask.array.from_delayed(
-                    delayed_J_block,
+                j_row_blocks.append(dask.array.from_delayed(
+                    delayed(parallel_block_compute, pure=True)(
+                        self, f, src, partial_derivs[:, d_count: d_count + len(block_ind)],
+                        tInd, solution_type, d_count, Jmatrix, self.field_derivs[tInd + 1][isrc][1][block_ind, :]
+                    ),
                     shape=(len(block_ind), m_size),
                     dtype=np.float32
                 ))
-                # print(f"Appending block {isrc} in {time() - tc} seconds")
                 d_count += len(block_ind)
 
-            field_deriv_blocks.append(dask.array.hstack(source_blocks))
+            field_deriv_blocks.append(dask.array.hstack(field_blocks))
+
+        del field_derivatives
 
         if self.store_sensitivities == "disk":
             Jmatrix.set_orthogonal_selection(
                 (np.arange(self.survey.nD), slice(None)),
-                Jmatrix + dask.array.vstack(row_blocks).astype(np.float32)
+                Jmatrix + dask.array.vstack(j_row_blocks).astype(np.float32)
             )
+            field_derivatives = [
+                dask.array.to_zarr(
+                    field_deriv_blocks[i], self.sensitivity_path + f"field_derivs_{i}.zarr",
+                    overwrite=True,
+                    return_stored = True,
+                ) for i in range(len(field_deriv_blocks))
+            ]
         else:
-            dask.compute(row_blocks)
+            dask.compute(j_row_blocks)
+            field_derivatives = dask.compute(field_deriv_blocks)[0]
 
-        del field_derivs_t
-        field_derivs_t = {isrc: elem for isrc, elem in enumerate(dask.compute(field_deriv_blocks)[0])}
+        field_derivatives = {isrc: elem for isrc, elem in enumerate(field_derivatives)}
 
     for A in Ainv.values():
         A.clean()

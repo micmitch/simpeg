@@ -3,6 +3,7 @@ import dask.array
 
 from ....electromagnetics.time_domain.simulation import BaseTDEMSimulation as Sim
 from ....utils import Zero
+from multiprocessing import cpu_count
 import numpy as np
 import scipy.sparse as sp
 from time import time
@@ -105,7 +106,7 @@ def dask_dpred(self, m=None, f=None, compute_J=False):
 
 Sim.dpred = dask_dpred
 Sim.field_derivs = None
-Sim.j_initialzer = None
+
 
 
 def compute_J(self, f=None, Ainv=None):
@@ -117,6 +118,7 @@ def compute_J(self, f=None, Ainv=None):
     row_chunks = int(np.ceil(
         float(self.survey.nD) / np.ceil(float(m_size) * self.survey.nD * 8. * 1e-6 / self.max_chunk_size)
     ))
+
     solution_type = self._fieldType + "Solution"  # the thing we solved for
 
     if self.store_sensitivities == "disk":
@@ -152,60 +154,67 @@ def compute_J(self, f=None, Ainv=None):
         self.field_derivs = dask.compute(field_derivs)[0]
 
     f = dask.delayed(f)
-    field_derivatives = {}
+    field_derivatives = None
+    batch_map = {}
 
     for tInd, dt in tqdm(zip(reversed(range(self.nT)), reversed(self.time_steps))):
 
         AdiagTinv = Ainv[dt]
         Asubdiag = self.getAsubdiag(tInd)
         d_count = 0
+        block_count = 0
         field_deriv_blocks = []
         j_row_blocks = []
-
+        count = 0
+        batch_block = []
+        batch_indices = []
+        batch_count = 0
         for isrc, src in enumerate(self.survey.source_list):
             field_blocks = []
             n_data = self.field_derivs[tInd+1][isrc][0].shape[1]
             n_blocks = int(np.ceil((m_size * n_data) * 8. * 1e-6 / 128.))
             sub_blocks = np.array_split(np.arange(n_data), n_blocks)
 
-            for block_ind in sub_blocks:
-                if isrc not in field_derivatives:
-                    ATinv_df_duT_v = (
-                        AdiagTinv * self.field_derivs[tInd + 1][isrc][0][:, block_ind].toarray()
-                    )
+            for i_block, block_ind in enumerate(sub_blocks):
+
+                if field_derivatives is None:
+                    batch_block.append(self.field_derivs[tInd + 1][isrc][0][:, block_ind].toarray())
+                    batch_map[isrc, i_block] = (batch_count, count)
                 else:
-                    ATinv_df_duT_v = AdiagTinv * np.asarray(field_derivatives[isrc][:, block_ind])
+                    i_file, i_block = batch_map[isrc, i_block]
+                    batch_block.append(field_derivatives[i_file][:, i_block:i_block + len(block_ind)])
 
-                if self.store_sensitivities == "disk":
-                    partial_derivs.set_orthogonal_selection(
-                        (slice(None), slice(d_count, d_count + len(block_ind))),
-                        ATinv_df_duT_v
+                batch_indices.append((isrc, block_ind))
+                block_count += 1
+
+                if block_count >= cpu_count():
+                    f_blocks, j_blocks = process_blocks(
+                        self, AdiagTinv, d_count, batch_block, batch_indices, Asubdiag, f, tInd,
+                        solution_type, Jmatrix
                     )
-                else:
-                    partial_derivs[:, d_count: d_count + len(block_ind)] = ATinv_df_duT_v
+                    field_deriv_blocks.append(dask.array.hstack(f_blocks))
+                    j_row_blocks.append(j_blocks)
 
-                field_blocks.append(
-                    dask.array.from_delayed(
-                        delayed(parallel_field_deriv, pure=True)(
-                            partial_derivs[:, d_count: d_count + len(block_ind)], Asubdiag,
-                            self.field_derivs[tInd][isrc][0][:, block_ind]
-                        ),
-                        shape=(Asubdiag.shape[0], len(block_ind)),
-                        dtype=np.float64
-                    )
-                )
-                j_row_blocks.append(dask.array.from_delayed(
-                    delayed(parallel_block_compute, pure=True)(
-                        self, f, src, partial_derivs[:, d_count: d_count + len(block_ind)],
-                        tInd, solution_type, d_count, Jmatrix, self.field_derivs[tInd + 1][isrc][1][block_ind, :]
-                    ),
-                    shape=(len(block_ind), m_size),
-                    dtype=np.float32
-                ))
-                d_count += len(block_ind)
+                    batch_block, batch_indices = [], []
+                    block_count = 0
+                    batch_count += 1
+                    d_count += count
+                    count = 0
+                    
+                count += len(block_ind)
+                # if isrc not in field_derivatives:
+                #     ATinv_df_duT_v = (
+                #         AdiagTinv * self.field_derivs[tInd + 1][isrc][0][:, block_ind].toarray()
+                #     )
+                # else:
+                #     ATinv_df_duT_v = AdiagTinv * np.asarray(field_derivatives[isrc][:, block_ind])
 
-            field_deriv_blocks.append(dask.array.hstack(field_blocks))
-
+        f_blocks, j_blocks = process_blocks(
+            self, AdiagTinv, d_count, batch_block, batch_indices, Asubdiag, f, tInd,
+            solution_type, Jmatrix
+        )
+        field_deriv_blocks.append(dask.array.hstack(f_blocks))
+        j_row_blocks.append(j_blocks)
         del field_derivatives
 
         if self.store_sensitivities == "disk":
@@ -224,8 +233,6 @@ def compute_J(self, f=None, Ainv=None):
             dask.compute(j_row_blocks)
             field_derivatives = dask.compute(field_deriv_blocks)[0]
 
-        field_derivatives = {isrc: elem for isrc, elem in enumerate(field_derivatives)}
-
     for A in Ainv.values():
         A.clean()
 
@@ -236,6 +243,46 @@ def compute_J(self, f=None, Ainv=None):
     return Jmatrix
 
 Sim.compute_J = compute_J
+
+
+def process_blocks(
+        self, AdiagTinv, d_count, batch_block, batch_indices, Asubdiag, f, tInd,
+        solution_type, Jmatrix
+    ):
+    ATinv_df_duT_v = AdiagTinv * np.hstack(batch_block)
+    field_blocks = []
+    j_row_blocks = []
+    count = 0
+    for block, indices in zip(batch_block, batch_indices):
+        block_size = block.shape[1]
+        field_blocks.append(
+            dask.array.from_delayed(
+                delayed(parallel_field_deriv, pure=True)(
+                    ATinv_df_duT_v[:, count: count + block_size], Asubdiag,
+                    self.field_derivs[tInd][indices[0]][0][:, indices[1]]
+                ),
+                shape=(Asubdiag.shape[0], block_size),
+                dtype=np.float64
+            )
+        )
+        j_row_blocks.append(dask.array.from_delayed(
+            delayed(parallel_block_compute, pure=True)(
+                self, f,
+                self.survey.source_list[indices[0]],
+                ATinv_df_duT_v[:, count: count + block_size],
+                tInd,
+                solution_type,
+                d_count,
+                Jmatrix,
+                self.field_derivs[tInd + 1][indices[0]][1][indices[1], :]
+            ),
+            shape=(block_size, Jmatrix.shape[1]),
+            dtype=np.float32
+        ))
+        count += block_size
+        d_count += block_size
+
+    return field_blocks, j_row_blocks
 
 
 def block_deriv(simulation, src, tInd, f, block_size):

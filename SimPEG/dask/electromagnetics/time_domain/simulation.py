@@ -207,13 +207,15 @@ def compute_J(self, f=None, Ainv=None):
                 #     )
                 # else:
                 #     ATinv_df_duT_v = AdiagTinv * np.asarray(field_derivatives[isrc][:, block_ind])
+        
+        if batch_block:
+            f_blocks, j_blocks = process_blocks(
+                self, AdiagTinv, d_count, batch_block, batch_indices, Asubdiag, f, tInd,
+                solution_type, Jmatrix
+            )
+            field_deriv_blocks.append(dask.array.hstack(f_blocks))
+            j_row_blocks += j_blocks
 
-        f_blocks, j_blocks = process_blocks(
-            self, AdiagTinv, d_count, batch_block, batch_indices, Asubdiag, f, tInd,
-            solution_type, Jmatrix
-        )
-        field_deriv_blocks.append(dask.array.hstack(f_blocks))
-        j_row_blocks += j_blocks
         del field_derivatives
 
         if self.store_sensitivities == "disk":

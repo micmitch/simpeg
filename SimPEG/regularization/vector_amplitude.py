@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import numpy as np
-import scipy.sparse as sp
 from typing import TYPE_CHECKING
 
 from discretize.base import BaseMesh
@@ -17,7 +16,8 @@ if TYPE_CHECKING:
 
 class BaseAmplitude(BaseRegularization):
     """
-    Base vector amplitude function.
+    Base vector amplitude class.
+    Requires a mesh and a :obj:`SimPEG.maps.Wires` mapping.
     """
 
     _W = None
@@ -30,9 +30,12 @@ class BaseAmplitude(BaseRegularization):
         return self._mapping
 
     @mapping.setter
-    def mapping(self, wires):
-        if not isinstance(wires, maps.Wires):
-            raise ValueError(f"A 'mapping' of type {maps.Wires} must be provided.")
+    def mapping(self, wires: maps.Wires | None):
+        if isinstance(wires, type(None)):
+            wires = maps.Wires(("model", self.regularization_mesh.nC))
+
+        elif not isinstance(wires, maps.Wires):
+            raise TypeError(f"A 'mapping' of type {maps.Wires} must be provided.")
 
         for wire in wires.maps:
             if wire[1].shape[0] != self.regularization_mesh.nC:
@@ -61,48 +64,50 @@ class BaseAmplitude(BaseRegularization):
         array([1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.])
         """
         for key, values in weights.items():
-            if not isinstance(values, tuple):
-                values = (values,) * len(self.mapping.maps)
+            if isinstance(values, tuple):
+                if len(values) != len(self.mapping.maps):
+                    raise ValueError(
+                        f"Values provided for weight {key} must be of tuple of len({len(self.mapping.maps)})"
+                    )
 
-            if len(values) != len(self.mapping.maps):
-                raise ValueError(
-                    f"Values provided for weight {key} must be of tuple of len({len(self.mapping.maps)})"
-                )
+                for value in values:
+                    validate_ndarray_with_shape(
+                        "weights", value, shape=self._weights_shapes, dtype=float
+                    )
 
-            self._weights[key] = {}
-            for (name, _), value in zip(self.mapping.maps, values):
+                self._weights[key] = np.linalg.norm(np.vstack(values), axis=0)
+            else:
                 validate_ndarray_with_shape(
-                    "weights", value, shape=self._weights_shapes, dtype=float
+                    "weights", values, shape=self._weights_shapes, dtype=float
                 )
-                self._weights[key][name] = value
+                self._weights[key] = values
 
         self._W = None
 
     @utils.timeIt
-    def __call__(self, m):
-        """ """
-        r = self.W * self.f_m(m)
-        return 0.5 * r.dot(r)
-
-    @utils.timeIt
     def deriv(self, m) -> np.ndarray:
         """ """
-        f_m_derivs = 0.0
-        for f_m_deriv in self.f_m_deriv(m):
-            f_m_derivs += f_m_deriv.T * ((self.W.T * self.W) * f_m_deriv * m)
-        return f_m_derivs
+        d_m = self._delta_m(m)
+
+        deriv = 0.0
+
+        for f_m_deriv in self.f_m_deriv(d_m):
+            deriv += f_m_deriv.T * ((self.W.T * self.W) * f_m_deriv * d_m)
+
+        return deriv
 
     @utils.timeIt
     def deriv2(self, m, v=None) -> csr_matrix:
         """ """
-        f_m_derivs = 0.0
+        deriv = 0.0
+
         for f_m_deriv in self.f_m_deriv(m):
             if v is None:
-                f_m_derivs += f_m_deriv.T * ((self.W.T * self.W) * f_m_deriv)
+                deriv += f_m_deriv.T * ((self.W.T * self.W) * f_m_deriv)
             else:
-                f_m_derivs += f_m_deriv.T * (self.W.T * (self.W * (f_m_deriv * v)))
+                deriv += f_m_deriv.T * ((self.W.T * self.W) * f_m_deriv * v)
 
-        return f_m_derivs
+        return deriv
 
     @property
     def _nC_residual(self) -> int:
@@ -118,10 +123,6 @@ class BaseAmplitude(BaseRegularization):
 class AmplitudeSmallness(SparseSmallness, BaseAmplitude):
     """
     Sparse smallness regularization on vector amplitude.
-
-    **Inputs**
-
-    :param int norm: norm on the smallness
     """
 
     def f_m(self, m):
@@ -132,35 +133,16 @@ class AmplitudeSmallness(SparseSmallness, BaseAmplitude):
         return np.linalg.norm(self.mapping * self._delta_m(m), axis=0)
 
     def f_m_deriv(self, m) -> csr_matrix:
-
         deriv = []
         dm = self._delta_m(m)
-        for name, wire in self.mapping.maps:
+        for _, wire in self.mapping.maps:
             deriv += [wire.deriv(dm)]
         return deriv
-
-    @property
-    def W(self):
-        """
-        Weighting matrix
-        """
-        if getattr(self, "_W", None) is None:
-            weights = []
-
-            for name, _ in self.mapping.maps:
-                weights.append(1.0)
-                for weight in self._weights.values():
-                    weights[-1] *= weight[name]
-
-                weights[-1] = utils.sdiag(weights[-1] ** 0.5)
-
-            self._W = sp.vstack(weights)
-        return self._W
 
 
 class AmplitudeSmoothnessFirstOrder(SparseSmoothness, BaseAmplitude):
     """
-    Base Class for sparse regularization on first spatial derivatives
+    Sparse first spatial derivatives of amplitude.
     """
 
     def f_m(self, m):
@@ -169,42 +151,12 @@ class AmplitudeSmoothnessFirstOrder(SparseSmoothness, BaseAmplitude):
         return self.cell_gradient @ a
 
     def f_m_deriv(self, m) -> csr_matrix:
-
         deriv = []
         dm = self._delta_m(m)
-        for name, wire in self.mapping.maps:
+        for _, wire in self.mapping.maps:
             deriv += [self.cell_gradient * wire.deriv(dm)]
 
         return deriv
-
-    @property
-    def W(self):
-        """
-        Weighting matrix that takes the volumes, free weights, fixed weights and
-        length scales of the difference operator (normalized optional).
-        """
-        if getattr(self, "_W", None) is None:
-            average_cell_2_face = getattr(
-                self.regularization_mesh, "aveCC2F{}".format(self.orientation)
-            )
-            weights = []
-
-            for name, _ in self.mapping.maps:
-
-                weights.append(1.0)
-
-                for weight in self._weights.values():
-                    values = weight[name]
-                    if values.shape[0] == self.regularization_mesh.nC:
-                        values = average_cell_2_face * values
-
-                    weights[-1] *= values
-
-                weights[-1] = utils.sdiag(weights[-1] ** 0.5)
-
-            self._W = sp.vstack(weights)
-
-        return self._W
 
     def update_weights(self, m):
         """
@@ -221,18 +173,6 @@ class AmplitudeSmoothnessFirstOrder(SparseSmoothness, BaseAmplitude):
                         getattr(self.regularization_mesh, f"cell_gradient_{comp}")
                         * delta_m
                     )
-
-                    if self.units is not None and self.units.lower() == "radian":
-                        Ave = getattr(self.regularization_mesh, f"aveCC2F{comp}")
-                        length_scales = Ave * (
-                            self.regularization_mesh.Pac.T
-                            * self.regularization_mesh.mesh.h_gridded[:, ii]
-                        )
-                        dm = (
-                            utils.mat_utils.coterminal(dm * length_scales)
-                            / length_scales
-                        )
-
                     f_m += np.abs(
                         getattr(self.regularization_mesh, f"aveF{comp}2CC") * dm
                     )
@@ -246,21 +186,23 @@ class AmplitudeSmoothnessFirstOrder(SparseSmoothness, BaseAmplitude):
 
 
 class VectorAmplitude(Sparse):
-    """
+    r"""
     The regularization is:
 
     The function defined here approximates:
 
     .. math::
-        \phi_m(\mathbf{m}) = \alpha_s \| \mathbf{W}_s \; \mathbf{a}(\mathbf{m} - \mathbf{m_{ref}) \|_p \\
-        + \alpha_x \| \mathbf{W}_x \; \frac{\partial}{\partial x} \mathbf{a}(\mathbf{m} - \mathbf{m_{ref}) \|_p \\
-        + \alpha_y \| \mathbf{W}_y \; \frac{\partial}{\partial y} \mathbf{a}(\mathbf{m} - \mathbf{m_{ref}) \|_p \\
-        + \alpha_z \| \mathbf{W}_z \; \frac{\partial}{\partial z} \mathbf{a}(\mathbf{m} - \mathbf{m_{ref}) \|_p \\
+
+        \phi_m(\mathbf{m}) = \alpha_s \| \mathbf{W}_s \; \mathbf{a}(\mathbf{m} - \mathbf{m_{ref}) \|_p
+        + \alpha_x \| \mathbf{W}_x \; \frac{\partial}{\partial x} \mathbf{a}(\mathbf{m} - \mathbf{m_{ref}) \|_p
+        + \alpha_y \| \mathbf{W}_y \; \frac{\partial}{\partial y} \mathbf{a}(\mathbf{m} - \mathbf{m_{ref}) \|_p
+        + \alpha_z \| \mathbf{W}_z \; \frac{\partial}{\partial z} \mathbf{a}(\mathbf{m} - \mathbf{m_{ref}) \|_p
 
     where $\mathbf{a}(\mathbf{m} - \mathbf{m_{ref})$ is the vector amplitude of the difference between
     the model and the reference model.
 
     .. math::
+
         \mathbf{a}(\mathbf{m} - \mathbf{m_{ref}) = [\sum_{i}^{N}(\mathbf{P}_i\;(\mathbf{m} - \mathbf{m_{ref}}))^{2}]^{1/2}
 
     where :math:`\mathbf{P}_i` is the projection of i-th component of the vector model with N-dimensions.
@@ -270,48 +212,49 @@ class VectorAmplitude(Sparse):
     def __init__(
         self,
         mesh,
-        wire_map,
+        mapping=None,
         active_cells=None,
         **kwargs,
     ):
-        if not isinstance(mesh, RegularizationMesh):
-            mesh = RegularizationMesh(mesh)
-
-        if not isinstance(mesh, RegularizationMesh):
-            TypeError(
+        if not isinstance(mesh, (BaseMesh, RegularizationMesh)):
+            raise TypeError(
                 f"'regularization_mesh' must be of type {RegularizationMesh} or {BaseMesh}. "
                 f"Value of type {type(mesh)} provided."
             )
+
+        if not isinstance(mesh, RegularizationMesh):
+            mesh = RegularizationMesh(mesh)
+
         self._regularization_mesh = mesh
 
         if active_cells is not None:
             self._regularization_mesh.active_cells = active_cells
 
         objfcts = [
-            AmplitudeSmallness(mesh=self.regularization_mesh, mapping=wire_map),
+            AmplitudeSmallness(mesh=self.regularization_mesh, mapping=mapping),
             AmplitudeSmoothnessFirstOrder(
-                mesh=self.regularization_mesh, mapping=wire_map, orientation="x"
+                mesh=self.regularization_mesh, orientation="x", mapping=mapping
             ),
         ]
 
         if mesh.dim > 1:
             objfcts.append(
                 AmplitudeSmoothnessFirstOrder(
-                    mesh=self.regularization_mesh, mapping=wire_map, orientation="y"
+                    mesh=self.regularization_mesh, orientation="y", mapping=mapping
                 )
             )
 
         if mesh.dim > 2:
             objfcts.append(
                 AmplitudeSmoothnessFirstOrder(
-                    mesh=self.regularization_mesh, mapping=wire_map, orientation="z"
+                    mesh=self.regularization_mesh, orientation="z", mapping=mapping
                 )
             )
 
         super().__init__(
             self.regularization_mesh,
             objfcts=objfcts,
-            mapping=wire_map,
+            mapping=mapping,
             **kwargs,
         )
 
@@ -322,7 +265,7 @@ class VectorAmplitude(Sparse):
     @mapping.setter
     def mapping(self, wires):
         if not isinstance(wires, maps.Wires):
-            raise ValueError(f"A 'mapping' of type {maps.Wires} must be provided.")
+            raise TypeError(f"A 'mapping' of type {maps.Wires} must be provided.")
 
         for wire in wires.maps:
             if wire[1].shape[0] != self.regularization_mesh.nC:

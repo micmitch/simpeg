@@ -2189,7 +2189,7 @@ class Update_IRLS(InversionDirective):
 
             for obj in reg.objfcts:
                 threshold = np.percentile(
-                    np.abs(obj.f_m(self.invProb.model)), self.prctile
+                    np.abs(obj.mapping * obj._delta_m(self.invProb.model)), self.prctile
                 )
                 if isinstance(obj, SmoothnessFirstOrder):
                     threshold /= reg.regularization_mesh.base_length
@@ -2730,10 +2730,6 @@ class UpdateSensitivityWeights(InversionDirective):
                     (reg.mapping * jtj_diag) / reg.regularization_mesh.vol**2.0
                 )
 
-        if self.normalization:
-            wr /= wr.max()
-
-        wr += self.threshold
         wr **= 0.5
 
         # Apply thresholding

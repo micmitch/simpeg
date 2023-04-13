@@ -21,7 +21,7 @@ def _store_model(mapping, sim, model):
 def _calc_fields(mapping, sim, model, apply_map=False):
     if apply_map:
         sim.model = mapping @ model
-    return sim.fields(m=sim.model)
+    return sim.fields(sim.model)
 
 
 def _calc_dpred(mapping, sim, model, field, apply_map=False):

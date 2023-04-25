@@ -95,6 +95,7 @@ class MetaSimulation(BaseSimulation):
         )
         self.simulations = simulations
         self.mappings = mappings
+        self.model = None
         # give myself a BaseSurvey that has the number of data equal
         # to the sum of the sims' data.
         survey = BaseSurvey([])

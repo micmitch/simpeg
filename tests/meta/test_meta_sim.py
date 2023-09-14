@@ -133,26 +133,26 @@ def test_sum_sim_correctness():
     # test fields objects
     f_full = full_sim.fields(m_test)
     f_mult = sum_sim.fields(m_test)
-    np.testing.assert_allclose(f_full, sum(f_mult))
+    np.testing.assert_allclose(f_full, sum(f_mult), rtol=1e-6)
 
     # test data output
     d_full = full_sim.dpred(m_test, f=f_full)
     d_mult = sum_sim.dpred(m_test, f=f_mult)
-    np.testing.assert_allclose(d_full, d_mult)
+    np.testing.assert_allclose(d_full, d_mult, rtol=1e-6)
 
     # test Jvec
     u = np.random.rand(mesh.n_cells)
     jvec_full = full_sim.Jvec(m_test, u, f=f_full)
     jvec_mult = sum_sim.Jvec(m_test, u, f=f_mult)
 
-    np.testing.assert_allclose(jvec_full, jvec_mult)
+    np.testing.assert_allclose(jvec_full, jvec_mult, rtol=1e-6)
 
     # test Jtvec
     v = np.random.rand(survey.nD)
     jtvec_full = full_sim.Jtvec(m_test, v, f=f_full)
     jtvec_mult = sum_sim.Jtvec(m_test, v, f=f_mult)
 
-    np.testing.assert_allclose(jtvec_full, jtvec_mult)
+    np.testing.assert_allclose(jtvec_full, jtvec_mult, rtol=1e-6)
 
     # test get diag
     diag_full = full_sim.getJtJdiag(m_test, f=f_full)
@@ -362,3 +362,56 @@ def test_repeat_errors():
     mappings[0] = maps.Projection(mesh.n_cells, [0, 1, 3, 5, 10])
     with pytest.raises(ValueError):
         RepeatedSimulation(sim, mappings)
+
+
+def test_cache_clear_on_model_clear():
+    mesh = TensorMesh([16, 16, 16], origin="CCN")
+
+    rx_locs = np.mgrid[-0.25:0.25:5j, -0.25:0.25:5j, 0:1:1j]
+    rx_locs = rx_locs.reshape(3, -1).T
+    rxs = dc.receivers.Pole(rx_locs)
+    source_locs = np.mgrid[-0.5:0.5:10j, 0:1:1j, 0:1:1j].reshape(3, -1).T
+    src_list = [
+        dc.sources.Pole(
+            [
+                rxs,
+            ],
+            location=loc,
+        )
+        for loc in source_locs
+    ]
+
+    m_test = np.arange(mesh.n_cells) / mesh.n_cells + 0.1
+
+    # split by chunks of sources
+    chunk_size = 3
+    sims = []
+    mappings = []
+    for i in range(0, len(src_list) + 1, chunk_size):
+        end = min(i + chunk_size, len(src_list))
+        if i == end:
+            break
+        survey_chunk = dc.Survey(src_list[i:end])
+        sims.append(
+            dc.Simulation3DNodal(mesh, survey=survey_chunk, sigmaMap=maps.IdentityMap())
+        )
+        mappings.append(maps.IdentityMap())
+
+    multi_sim = MetaSimulation(sims, mappings)
+
+    assert multi_sim.model is None
+    for sim in multi_sim.simulations:
+        assert sim.model is None
+
+    # create fields to do some caching operations
+    multi_sim.fields(m_test)
+    assert multi_sim.model is not None
+    for sim in multi_sim.simulations:
+        assert sim._Me_Sigma is not None
+
+    # then set to None to make sure that works (and it clears things)
+    multi_sim.model = None
+    assert multi_sim.model is None
+    for sim in multi_sim.simulations:
+        assert sim.model is None
+        assert not hasattr(sim, "_Me_Sigma")

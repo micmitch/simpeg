@@ -95,6 +95,7 @@ class MetaSimulation(BaseSimulation):
         )
         self.simulations = simulations
         self.mappings = mappings
+        self.model = None
         # give myself a BaseSurvey that has the number of data equal
         # to the sum of the sims' data.
         self.survey = self._make_survey()
@@ -185,12 +186,20 @@ class MetaSimulation(BaseSimulation):
         # Only send the model to the internal simulations if it was updated.
         if not self._repeat_sim and updated:
             for mapping, sim in zip(self.mappings, self.simulations):
-                sim.model = mapping * self._model
+                if value is not None:
+                    sim.model = mapping * self._model
+                else:
+                    sim.model = value
 
     def fields(self, m):
         """Create fields for every simulation.
 
         The returned list contains the field object from each simulation.
+
+        Parameters
+        ----------
+        m : array_like
+            The full model vector.
 
         Returns
         -------
@@ -202,9 +211,9 @@ class MetaSimulation(BaseSimulation):
         # The above should pass the model to all the internal simulations.
         f = []
         for mapping, sim in zip(self.mappings, self.simulations):
-            if self._repeat_sim:
+            if self._repeat_sim and self.model is not None:
                 sim.model = mapping * self.model
-            f.append(sim.fields(m=sim.model))
+            f.append(sim.fields(sim.model))
         return f
 
     def dpred(self, m=None, f=None):
@@ -287,7 +296,10 @@ class MetaSimulation(BaseSimulation):
             if W is None:
                 W = np.ones(self.survey.nD)
             else:
-                W = W.diagonal()
+                try:
+                    W = W.diagonal()
+                except (AttributeError, TypeError, ValueError):
+                    pass
             jtj_diag = 0.0
             # approximate the JtJ diag on the full model space as:
             # sum((diag(sqrt(jtj_diag)) @ M_deriv))**2)
@@ -341,6 +353,7 @@ class SumMetaSimulation(MetaSimulation):
         )
         self.simulations = simulations
         self.mappings = mappings
+        self.model = None
         # give myself a BaseSurvey
         self.survey = self._make_survey()
 
@@ -420,7 +433,9 @@ class RepeatedSimulation(MetaSimulation):
     Parameters
     ----------
     simulation : SimPEG.simulation.BaseSimulation
+        The simulation to use repeatedly with different mappings.
     mappings : (n_sim) list of SimPEG.maps.IdentityMap
+        The list of different mappings to use.
     """
 
     _repeat_sim = True
@@ -432,6 +447,7 @@ class RepeatedSimulation(MetaSimulation):
         )
         self.simulation = simulation
         self.mappings = mappings
+        self.model = None
         self.survey = self._make_survey()
         self._data_offsets = np.cumsum(np.r_[0, self.survey.vnD])
 
